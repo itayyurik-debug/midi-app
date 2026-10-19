@@ -31,13 +31,15 @@ STEM_MAP = {
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+PPQ_GLOBAL = 480  # Resolution ticks per beat
 
 
-# ---------- anchor MIDI parsing: full tempo map + time-signature map, ticks -> seconds ----------
+# ---------- Anchor MIDI parsing: tempo map + time-signature map ----------
 def parse_anchor_midi(path):
     mid = mido.MidiFile(str(path))
     ppq = mid.ticks_per_beat
     tempo_events, timesig_events, notes = [], [], []
+    
     for track in mid.tracks:
         time = 0
         active = {}
@@ -48,18 +50,21 @@ def parse_anchor_midi(path):
             elif msg.type == "time_signature":
                 timesig_events.append((time, msg.numerator, msg.denominator))
             elif msg.type == "note_on" and msg.velocity > 0:
-                active[msg.note] = time
+                active[msg.note] = (time, msg.velocity)
             elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
                 if msg.note in active:
-                    notes.append((msg.note, active.pop(msg.note), time))
+                    start_time, vel = active.pop(msg.note)
+                    notes.append((msg.note, start_time, time, vel))
+
     if not tempo_events:
         tempo_events = [(0, 500000)]
-    tempo_events.sort()
+    tempo_events.sort(key=lambda x: x[0])
     if tempo_events[0][0] > 0:
         tempo_events.insert(0, (0, tempo_events[0][1]))
+
     if not timesig_events:
         timesig_events = [(0, 4, 4)]
-    timesig_events.sort()
+    timesig_events.sort(key=lambda x: x[0])
     if timesig_events[0][0] > 0:
         timesig_events.insert(0, (0, timesig_events[0][1], timesig_events[0][2]))
 
@@ -76,7 +81,7 @@ def parse_anchor_midi(path):
 
     tempo_map = [(tick_to_sec(t), round(60e6 / us)) for t, us in tempo_events]
     timesig_map = [(tick_to_sec(t), n, d) for t, n, d in timesig_events]
-    note_list = [(p, tick_to_sec(s), tick_to_sec(e)) for p, s, e in notes]
+    note_list = [(p, tick_to_sec(s), tick_to_sec(e)) for p, s, e, _ in notes]
     return {"tempo_map": tempo_map, "timesig_map": timesig_map, "notes": note_list}
 
 
@@ -95,12 +100,13 @@ def detect_key(notes):
 
 
 def snap_to_key(notes, tonic, is_minor):
+    """notes: list of (pitch, start_sec, end_sec, velocity)."""
     scale = {(x + tonic) % 12 for x in ([0, 2, 3, 5, 7, 8, 10] if is_minor else [0, 2, 4, 5, 7, 9, 11])}
     out = []
-    for pitch, start, end in notes:
+    for pitch, start, end, vel in notes:
         pc = pitch % 12
         if pc in scale:
-            out.append((pitch, start, end))
+            out.append((pitch, start, end, vel))
             continue
         best_s, best_d = pc, 99
         for s in scale:
@@ -108,11 +114,11 @@ def snap_to_key(notes, tonic, is_minor):
             if d < best_d:
                 best_d, best_s = d, s
         new_pitch = pitch + ((best_s - pc + 18) % 12 - 6) if best_d <= 1 else pitch
-        out.append((new_pitch, start, end))
+        out.append((new_pitch, start, end, vel))
     return out
 
 
-# ---------- tempo-map-aware quantization + MIDI writing ----------
+# ---------- MIDI cleaning & Quantization Engine ----------
 def build_segments(tempo_map, ppq):
     segs, tick = [], 0.0
     for i, (t, bpm) in enumerate(tempo_map):
@@ -123,9 +129,6 @@ def build_segments(tempo_map, ppq):
     return segs
 
 
-PPQ_GLOBAL = 480  # fixed resolution for all output files
-
-
 def sec_to_tick(sec, segs):
     for t, bpm, tick in reversed(segs):
         if sec >= t:
@@ -133,21 +136,65 @@ def sec_to_tick(sec, segs):
     return 0.0
 
 
+def deduplicate_and_clean_quantized(quantized_notes):
+    """
+    מונע חפיפה וכפילויות של תווים באותו Pitch:
+    קוטע או מאחד תווים חופפים כך שלא נוצרים תווים תקועים ב-DAW.
+    """
+    by_pitch = {}
+    for pitch, start, dur, vel in quantized_notes:
+        if dur <= 0:
+            continue
+        by_pitch.setdefault(pitch, []).append((start, start + dur, vel))
+
+    cleaned = []
+    for pitch, note_list in by_pitch.items():
+        note_list.sort(key=lambda x: (x[0], -x[1]))
+        merged = []
+        for start, end, vel in note_list:
+            if not merged:
+                merged.append([start, end, vel])
+                continue
+
+            last_start, last_end, last_vel = merged[-1]
+            if start == last_start:
+                merged[-1][1] = max(last_end, end)
+                merged[-1][2] = max(last_vel, vel)
+            elif start < last_end:
+                merged[-1][1] = start
+                if end > start:
+                    merged.append([start, end, vel])
+            else:
+                merged.append([start, end, vel])
+
+        for s, e, v in merged:
+            d = e - s
+            if d > 0:
+                cleaned.append((pitch, s, d, v))
+
+    cleaned.sort(key=lambda x: x[1])
+    return cleaned
+
+
 def quantize_notes(bp_notes, tempo_map, anchor_notes):
     segs = build_segments(tempo_map, PPQ_GLOBAL)
-    grid = PPQ_GLOBAL // 4
+    grid = PPQ_GLOBAL // 4  # 1/16th note grid
     phase = 0
     if anchor_notes:
         offsets = sorted(int(sec_to_tick(s, segs)) % grid for _, s, _ in anchor_notes)
-        phase = offsets[len(offsets) // 2]
-    out = []
-    for pitch, start, end in bp_notes:
+        if offsets:
+            phase = offsets[len(offsets) // 2]
+            
+    raw_quantized = []
+    for pitch, start, end, vel in bp_notes:
         s_tick = sec_to_tick(start, segs)
         e_tick = sec_to_tick(end, segs)
         q_s = round((s_tick - phase) / grid) * grid + phase
         q_d = max(grid, round((e_tick - s_tick) / grid) * grid)
-        out.append((pitch, max(0, int(q_s)), int(q_d)))
-    return out, segs
+        raw_quantized.append((pitch, max(0, int(q_s)), int(q_d), vel))
+
+    cleaned_quantized = deduplicate_and_clean_quantized(raw_quantized)
+    return cleaned_quantized, segs
 
 
 def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split_piano=False):
@@ -157,6 +204,7 @@ def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split
     for t, num, den in timesig_map:
         events.append((sec_to_tick(t, segs), mido.MetaMessage("time_signature", numerator=num, denominator=den)))
     events.sort(key=lambda e: e[0])
+    
     meta_track = mido.MidiTrack()
     last = 0.0
     for tick, msg in events:
@@ -168,10 +216,13 @@ def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split
     def notes_track(notes):
         tr = mido.MidiTrack()
         evs = []
-        for pitch, s_tick, d_tick in notes:
-            evs.append((s_tick, mido.Message("note_on", note=int(pitch), velocity=90)))
+        for pitch, s_tick, d_tick, vel in notes:
+            evs.append((s_tick, mido.Message("note_on", note=int(pitch), velocity=int(vel))))
             evs.append((s_tick + d_tick, mido.Message("note_off", note=int(pitch), velocity=0)))
-        evs.sort(key=lambda e: e[0])
+            
+        # סדר מיון קריטי: note_off קודם ל-note_on באותו ה-Tick בדיוק
+        evs.sort(key=lambda e: (e[0], 0 if e[1].type == "note_off" else 1))
+        
         last_t = 0
         for tick, msg in evs:
             msg.time = max(0, round(tick - last_t))
@@ -193,7 +244,7 @@ def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split
     return buf.getvalue()
 
 
-# ---------- frontend ----------
+# ---------- Frontend HTML ----------
 FORM_HTML = """
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -265,7 +316,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div class="bg-orb a"></div><div class="bg-orb b"></div>
 <div class="wrap">
 <h1>Local Transcription Pipeline</h1>
-<p class="sub">Demucs separates the stem, then Basic Pitch transcribes it (tuned parameters: onset 0.65, frame 0.55, min note 150ms), quantized to the key and tempo you set below.</p>
+<p class="sub">Demucs separates the stem, then Basic Pitch transcribes it with noise cleanup, quantized to your target key and tempo.</p>
 <div class="chain" id="chain"></div>
 <div class="card">
 <form id="f">
@@ -274,10 +325,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <select id="instrument">
     <option value="bass">Bass</option><option value="guitar">Guitar</option>
     <option value="piano">Piano</option><option value="vocals">Vocals</option>
-    <option value="strings">Strings (uses the "other" stem)</option>
-    <option value="brass">Brass (uses the "other" stem)</option>
-    <option value="trumpet">Trumpet (uses the "other" stem)</option>
-    <option value="sax">Saxophone (uses the "other" stem)</option>
+    <option value="strings">Strings (uses "other" stem)</option>
+    <option value="brass">Brass (uses "other" stem)</option>
+    <option value="trumpet">Trumpet (uses "other" stem)</option>
+    <option value="sax">Saxophone (uses "other" stem)</option>
   </select></div>
 
   <div class="modebar">
@@ -423,19 +474,27 @@ async def transcribe(
             raise HTTPException(500, f"Expected stem '{stem_name}.wav' not found in Demucs output.")
         stem_path = found_stems[0]
 
-        # 2) Basic Pitch transcription with tuned accuracy parameters
+        # 2) Basic Pitch transcription with note extraction & noise filter
         _, midi_data, _ = predict(
             str(stem_path),
             model_or_model_path=ICASSP_2022_MODEL_PATH,
-            onset_threshold=0.65,       # סף תחילת תו גבוה יותר לסינון רעשים ותווים "שגויים"
-            frame_threshold=0.55,       # סף החזקת תו מוגבר
-            minimum_note_length=150.0,  # אורך מינימלי במילישניות (מסנן תווים קצרים ורנדומליים)
+            onset_threshold=0.65,
+            frame_threshold=0.55,
+            minimum_note_length=150.0,
         )
-        bp_notes = [(n.pitch, n.start, n.end) for inst in midi_data.instruments for n in inst.notes]
+        
+        bp_notes = []
+        for inst in midi_data.instruments:
+            for n in inst.notes:
+                vel = int(getattr(n, "velocity", 90))
+                # סינון תווי רפאים בעוצמה נמוכה מ-20 או אורך קצר מ-0.10 שניות
+                if vel >= 20 and (n.end - n.start) >= 0.10:
+                    bp_notes.append((n.pitch, n.start, n.end, vel))
+
         if not bp_notes:
             raise HTTPException(500, "No notes were transcribed from the isolated stem. Try lowering thresholds.")
 
-        # 3) Key + tempo map: either from the anchor MIDI, or manual
+        # 3) Key + tempo map: either from anchor MIDI, or manual
         if mode == "anchor":
             if anchor_midi is None:
                 raise HTTPException(400, "mode=anchor requires an anchor_midi file.")
@@ -447,9 +506,9 @@ async def transcribe(
             tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor["notes"]
         else:
             tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
-            tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
+            tempo_map, timesig_map, anchor_notes = [(0, float(manual_bpm))], [(0, 4, 4)], []
 
-        # 4) Snap to key, quantize to the tempo map, write final MIDI
+        # 4) Snap to key, quantize to tempo grid, deduplicate & write final MIDI
         snapped = snap_to_key(bp_notes, tonic, is_minor)
         quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
         midi_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_piano=bool(split_piano))
