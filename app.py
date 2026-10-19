@@ -2,21 +2,7 @@
 Local transcription pipeline: Demucs (stem separation) -> Basic Pitch (MIDI transcription)
 -> tempo/key-aware quantization, mirroring the claude.ai "Interactive Transcription Studio".
 
-Runs entirely on YOUR computer / your own server. Nothing here talks to Claude.
-
-Setup (once):
-    pip install fastapi "uvicorn[standard]" python-multipart demucs basic-pitch mido
-
-Run:
-    uvicorn app:app --reload
-
-Then open http://127.0.0.1:8000 -- pick a file and an instrument, and choose one of two
-ways to set the key/tempo:
-  1) Manual key: pick the key yourself and type a BPM.
-  2) Anchor MIDI: upload a basic MIDI file and the key, tempo map (including mid-song
-     tempo changes) and time-signature map (including mid-song changes) are detected
-     from it automatically and used to build the final MIDI -- same logic as the
-     browser Studio.
+Runs entirely on YOUR computer / your own server.
 """
 import io
 import shutil
@@ -126,7 +112,7 @@ def snap_to_key(notes, tonic, is_minor):
     return out
 
 
-# ---------- tempo-map-aware quantization + MIDI writing (mirrors the browser Studio) ----------
+# ---------- tempo-map-aware quantization + MIDI writing ----------
 def build_segments(tempo_map, ppq):
     segs, tick = [], 0.0
     for i, (t, bpm) in enumerate(tempo_map):
@@ -279,11 +265,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div class="bg-orb a"></div><div class="bg-orb b"></div>
 <div class="wrap">
 <h1>Local Transcription Pipeline</h1>
-<p class="sub">Demucs separates the stem, then Basic Pitch transcribes it (onset 0.6, frame 0.5, min note length 127.7ms), quantized to the key and tempo you set below.</p>
+<p class="sub">Demucs separates the stem, then Basic Pitch transcribes it (tuned parameters: onset 0.65, frame 0.55, min note 150ms), quantized to the key and tempo you set below.</p>
 <div class="chain" id="chain"></div>
 <div class="card">
 <form id="f">
-  <div class="field"><label>Audio file (MP3)</label><input type="file" id="file" accept="audio/*" required></div>
+  <div class="field"><label>Audio file (MP3 / WAV)</label><input type="file" id="file" accept="audio/*" required></div>
   <div class="field"><label>Instrument</label>
   <select id="instrument">
     <option value="bass">Bass</option><option value="guitar">Guitar</option>
@@ -318,7 +304,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
   <div class="modepane" id="pane-anchor">
     <div class="field"><label>Anchor MIDI file</label><input type="file" id="anchorFile" accept=".mid,.midi"></div>
-    <p class="hint" style="margin-top:-8px">Key, tempo map, and time-signature map (including mid-song changes) are detected from this file automatically.</p>
+    <p class="hint" style="margin-top:-8px">Key, tempo map, and time-signature map are detected automatically.</p>
   </div>
 
   <div class="chk"><input type="checkbox" id="splitPiano"><label for="splitPiano">Split into two hands (piano only)</label></div>
@@ -327,7 +313,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 </form>
 <div id="msg"></div>
 </div>
-<p class="hint">Demucs has to process the whole track before Basic Pitch even starts, so this can take a few minutes &mdash; that's normal, not stuck.</p>
+<p class="hint">Demucs processes the track before Basic Pitch starts, which can take a couple of minutes on GPU/Colab.</p>
 </div>
 <script>
 function setMode(m){
@@ -353,7 +339,7 @@ document.getElementById('f').addEventListener('submit', async (e)=>{
   if(mode==='anchor' && !document.getElementById('anchorFile').files.length){ msg.innerHTML='<div class="msg err">Choose an anchor MIDI file, or switch to manual key.</div>'; return; }
   go.disabled=true;
   renderChain(1,1);
-  msg.innerHTML='<div class="msg ok"><span class="spin"></span>Demucs is separating the stem... this can take a few minutes.</div>';
+  msg.innerHTML='<div class="msg ok"><span class="spin"></span>Demucs is separating the stem... please wait.</div>';
   try{
     const fd=new FormData();
     fd.append('file',fileInput.files[0]);
@@ -431,21 +417,23 @@ async def transcribe(
         if result.returncode != 0:
             raise HTTPException(500, f"Demucs failed:\n{result.stderr[-2000:]}")
 
-        stem_path = separated_dir / "htdemucs_6s" / input_path.stem / f"{stem_name}.wav"
-        if not stem_path.exists():
-            raise HTTPException(500, f"Expected stem not found at {stem_path}")
+        # חיפוש דינמי של ה-stem בתוך תיקיית הפלט של Demucs
+        found_stems = list(separated_dir.rglob(f"{stem_name}.wav"))
+        if not found_stems:
+            raise HTTPException(500, f"Expected stem '{stem_name}.wav' not found in Demucs output.")
+        stem_path = found_stems[0]
 
-        # 2) Basic Pitch transcription with the tuned parameters
+        # 2) Basic Pitch transcription with tuned accuracy parameters
         _, midi_data, _ = predict(
             str(stem_path),
             model_or_model_path=ICASSP_2022_MODEL_PATH,
-            onset_threshold=0.6,
-            frame_threshold=0.5,
-            minimum_note_length=127.7,
+            onset_threshold=0.65,       # סף תחילת תו גבוה יותר לסינון רעשים ותווים "שגויים"
+            frame_threshold=0.55,       # סף החזקת תו מוגבר
+            minimum_note_length=150.0,  # אורך מינימלי במילישניות (מסנן תווים קצרים ורנדומליים)
         )
         bp_notes = [(n.pitch, n.start, n.end) for inst in midi_data.instruments for n in inst.notes]
         if not bp_notes:
-            raise HTTPException(500, "No notes were transcribed from the isolated stem.")
+            raise HTTPException(500, "No notes were transcribed from the isolated stem. Try lowering thresholds.")
 
         # 3) Key + tempo map: either from the anchor MIDI, or manual
         if mode == "anchor":
