@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+piano_transcription_inference
+basic-pitch
+torchlibrosa
+librosa
