@@ -5,3 +5,5 @@ piano_transcription_inference
 basic-pitch
 torchlibrosa
 librosa
+mido
+demucs

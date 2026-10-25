@@ -2,12 +2,200 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import io
 import shutil
 import subprocess
 import torch
 import gc
+import mido
 
 app = FastAPI(title="Audio to MIDI Pipeline")
+
+# ---------- key detection + tempo-map quantization (shared with the local-pipeline project) ----------
+MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+PPQ_OUT = 480
+
+
+def read_midi_notes_and_map(path):
+    """Read any standard MIDI file -> full tempo map, time-sig map, notes as (pitch, start_sec, end_sec)."""
+    mid = mido.MidiFile(str(path))
+    ppq = mid.ticks_per_beat
+    tempo_events, timesig_events, notes = [], [], []
+    for track in mid.tracks:
+        time = 0
+        active = {}
+        for msg in track:
+            time += msg.time
+            if msg.type == "set_tempo":
+                tempo_events.append((time, msg.tempo))
+            elif msg.type == "time_signature":
+                timesig_events.append((time, msg.numerator, msg.denominator))
+            elif msg.type == "note_on" and msg.velocity > 0:
+                active[msg.note] = (time, msg.velocity)
+            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                if msg.note in active:
+                    start_tick, vel = active.pop(msg.note)
+                    notes.append((msg.note, start_tick, time, vel))
+    if not tempo_events:
+        tempo_events = [(0, 500000)]
+    tempo_events.sort()
+    if tempo_events[0][0] > 0:
+        tempo_events.insert(0, (0, tempo_events[0][1]))
+    if not timesig_events:
+        timesig_events = [(0, 4, 4)]
+    timesig_events.sort()
+    if timesig_events[0][0] > 0:
+        timesig_events.insert(0, (0, timesig_events[0][1], timesig_events[0][2]))
+
+    def tick_to_sec(tick):
+        sec = 0.0
+        for i, (t_start, us) in enumerate(tempo_events):
+            t_end = tempo_events[i + 1][0] if i + 1 < len(tempo_events) else float("inf")
+            if tick <= t_start:
+                break
+            sec += (min(tick, t_end) - t_start) * (us / 1e6) / ppq
+            if tick <= t_end:
+                break
+        return sec
+
+    tempo_map = [(tick_to_sec(t), round(60e6 / us)) for t, us in tempo_events]
+    timesig_map = [(tick_to_sec(t), n, d) for t, n, d in timesig_events]
+    note_list = [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
+    return {"tempo_map": tempo_map, "timesig_map": timesig_map, "notes": note_list}
+
+
+def filter_ghost_notes(notes_with_vel, min_duration=0.06, min_velocity=15, max_duration=4.0):
+    """Drop too-short / too-quiet notes (ghost notes), and cap note length to tame
+    sustain-pedal smearing. Returns plain (pitch, start, end) tuples (velocity dropped
+    after filtering -- the output MIDI always writes a fixed velocity)."""
+    out = []
+    for pitch, start, end, vel in notes_with_vel:
+        dur = end - start
+        if dur < min_duration or vel < min_velocity:
+            continue
+        if dur > max_duration:
+            end = start + max_duration
+        out.append((pitch, start, end))
+    return out
+
+
+def detect_bpm_from_audio(wav_path):
+    """Audio-only tempo estimate, for the 'auto-detect' mode when no anchor MIDI is given."""
+    import numpy as np
+    import librosa
+    y, sr = librosa.load(wav_path, sr=None)
+    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    return float(np.atleast_1d(tempo)[0])
+
+
+def detect_key(notes):
+    hist = [0.0] * 12
+    for pitch, start, end in notes:
+        hist[pitch % 12] += max(0.05, end - start)
+    best = (-1e18, 0, False)
+    for tonic in range(12):
+        for profile, is_minor in ((MAJ_PROFILE, False), (MIN_PROFILE, True)):
+            score = sum(hist[(i + tonic) % 12] * profile[i] for i in range(12))
+            if score > best[0]:
+                best = (score, tonic, is_minor)
+    return best[1], best[2]
+
+
+def snap_to_key(notes, tonic, is_minor):
+    scale = {(x + tonic) % 12 for x in ([0, 2, 3, 5, 7, 8, 10] if is_minor else [0, 2, 4, 5, 7, 9, 11])}
+    out = []
+    for pitch, start, end in notes:
+        pc = pitch % 12
+        if pc in scale:
+            out.append((pitch, start, end))
+            continue
+        best_s, best_d = pc, 99
+        for s in scale:
+            d = min(abs(s - pc), 12 - abs(s - pc))
+            if d < best_d:
+                best_d, best_s = d, s
+        new_pitch = pitch + ((best_s - pc + 18) % 12 - 6) if best_d <= 1 else pitch
+        out.append((new_pitch, start, end))
+    return out
+
+
+def build_segments(tempo_map, ppq):
+    segs, tick = [], 0.0
+    for i, (t, bpm) in enumerate(tempo_map):
+        if i > 0:
+            prev_t, prev_bpm = tempo_map[i - 1]
+            tick += (t - prev_t) * (prev_bpm / 60.0) * ppq
+        segs.append((t, bpm, tick))
+    return segs
+
+
+def sec_to_tick(sec, segs):
+    for t, bpm, tick in reversed(segs):
+        if sec >= t:
+            return tick + (sec - t) * (bpm / 60.0) * PPQ_OUT
+    return 0.0
+
+
+def quantize_notes(bp_notes, tempo_map, anchor_notes):
+    segs = build_segments(tempo_map, PPQ_OUT)
+    grid = PPQ_OUT // 4
+    phase = 0
+    if anchor_notes:
+        offsets = sorted(int(sec_to_tick(s, segs)) % grid for _, s, _ in anchor_notes)
+        phase = offsets[len(offsets) // 2]
+    out = []
+    for pitch, start, end in bp_notes:
+        s_tick = sec_to_tick(start, segs)
+        e_tick = sec_to_tick(end, segs)
+        q_s = round((s_tick - phase) / grid) * grid + phase
+        q_d = max(grid, round((e_tick - s_tick) / grid) * grid)
+        out.append((pitch, max(0, int(q_s)), int(q_d)))
+    return out, segs
+
+
+def _notes_track(notes, channel=0):
+    tr = mido.MidiTrack()
+    evs = []
+    for pitch, s_tick, d_tick in notes:
+        evs.append((s_tick, mido.Message("note_on", note=int(pitch), velocity=90, channel=channel)))
+        evs.append((s_tick + d_tick, mido.Message("note_off", note=int(pitch), velocity=0, channel=channel)))
+    evs.sort(key=lambda e: e[0])
+    last_t = 0
+    for tick, msg in evs:
+        msg.time = max(0, round(tick - last_t))
+        tr.append(msg)
+        last_t = max(last_t, tick)
+    tr.append(mido.MetaMessage("end_of_track"))
+    return tr
+
+
+def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split_hands=False):
+    events = []
+    for t, bpm in tempo_map:
+        events.append((sec_to_tick(t, segs), mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm))))
+    for t, num, den in timesig_map:
+        events.append((sec_to_tick(t, segs), mido.MetaMessage("time_signature", numerator=num, denominator=den)))
+    events.sort(key=lambda e: e[0])
+    meta_track = mido.MidiTrack()
+    last = 0.0
+    for tick, msg in events:
+        msg.time = max(0, round(tick - last))
+        meta_track.append(msg)
+        last = max(last, tick)
+    meta_track.append(mido.MetaMessage("end_of_track"))
+
+    out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
+    out_mid.tracks.append(meta_track)
+    if split_hands:
+        # Right hand (treble): pitch >= 60 (middle C). Left hand (bass): below.
+        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] >= 60], channel=0))
+        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] < 60], channel=1))
+    else:
+        out_mid.tracks.append(_notes_track(quantized_notes, channel=0))
+    buf = io.BytesIO()
+    out_mid.save(file=buf)
+    return buf.getvalue()
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +244,15 @@ HTML_CONTENT = """<!DOCTYPE html>
         .success { color: #4ade80; }
         .error { color: #f87171; font-size: 0.85rem; word-break: break-all; }
         .loading { color: #facc15; }
+        .modebar { display: flex; gap: 8px; margin-top: 16px; }
+        .modebar label { flex: 1; text-align: center; padding: 9px 6px; border: 1px solid #475569; border-radius: 8px; font-size: 0.82rem; cursor: pointer; color: #94a3b8; }
+        .modebar input { display: none; }
+        .modebar label:has(input:checked) { border-color: #38bdf8; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.08); }
+        .modepane { display: none; text-align: right; }
+        .modepane.active { display: block; }
+        .row2 { display: flex; gap: 10px; }
+        .row2 > div { flex: 1; }
+        .fieldlabel { display: block; font-size: 0.8rem; color: #94a3b8; margin: 10px 0 4px; }
     </style>
 </head>
 <body>
@@ -69,9 +266,55 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <input type="file" id="audioFile" name="file" accept="audio/*,.mp3,.wav,.m4a" required onchange="updateFileName(this)">
             </div>
             <select name="model" id="modelSelect">
-                <option value="piano">🎹 Piano Transcription (פסנתר בלבד)</option>
-                <option value="basic">🎸 Basic Pitch (כללי)</option>
+                <option value="piano">🎹 פסנתר (Demucs + Piano Transcription)</option>
+                <option value="bass">🎸 בס (Demucs + Basic Pitch)</option>
+                <option value="guitar">🎸 גיטרה (Demucs + Basic Pitch)</option>
+                <option value="vocals">🎤 שירה (Demucs + Basic Pitch)</option>
+                <option value="other">🎻 שאר הכלים (סטם "other" של Demucs + Basic Pitch)</option>
             </select>
+            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">כל בחירה מפעילה קודם הפרדת Demucs אמיתית, ורק אז מתמללת את הכלי המבודד -- לא את כל התערובת.</p>
+
+            <div class="modebar">
+                <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>זיהוי אוטומטי</span></label>
+                <label><input type="radio" name="mode" value="manual" onchange="setMode('manual')"><span>קביעה ידנית</span></label>
+                <label><input type="radio" name="mode" value="anchor" onchange="setMode('anchor')"><span>MIDI בסיס</span></label>
+            </div>
+
+            <div class="modepane active" id="pane-detect">
+                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">הסולם יזוהה מתוך התווים שתומללו, והקצב (BPM) מתוך האודיו עצמו (librosa.beat_track). לא צריך להעלות שום דבר נוסף.</p>
+            </div>
+
+            <div class="modepane" id="pane-manual">
+                <div class="row2">
+                    <div>
+                        <label class="fieldlabel">סולם</label>
+                        <select id="keyTonic">
+                            <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
+                            <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
+                            <option value="6">F#</option><option value="7">G</option><option value="8">G#</option>
+                            <option value="9">A</option><option value="10">A#</option><option value="11">B</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="fieldlabel">מז'ור/מינור</label>
+                        <select id="keyMode"><option value="major">מז'ור</option><option value="minor">מינור</option></select>
+                    </div>
+                </div>
+                <label class="fieldlabel">קצב (BPM)</label>
+                <input type="number" id="manualBpm" value="120" style="width:100%;padding:12px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:white;box-sizing:border-box;">
+            </div>
+
+            <div class="modepane" id="pane-anchor">
+                <label class="fieldlabel">קובץ MIDI בסיס</label>
+                <input type="file" id="anchorFile" accept=".mid,.midi" style="display:block;width:100%;color:#94a3b8;font-size:0.85rem;">
+                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">הסולם, מפת הטמפו ומקצב (כולל שינויים באמצע השיר) ייקראו אוטומטית מהקובץ הזה.</p>
+            </div>
+
+            <label id="splitRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:14px;text-align:right">
+                <input type="checkbox" id="splitHands" style="width:auto">
+                פיצול לשתי ידיים (ליד ימין/שמאל, רק לפסנתר)
+            </label>
+
             <button type="submit" id="submitBtn">המר ל-MIDI 🚀</button>
         </form>
         <div id="status"></div>
@@ -127,12 +370,26 @@ HTML_CONTENT = """<!DOCTYPE html>
                 document.getElementById('fileName').innerText = "📄 " + input.files[0].name;
             }
         }
+        function setMode(m) {
+            document.getElementById('pane-detect').classList.toggle('active', m === 'detect');
+            document.getElementById('pane-manual').classList.toggle('active', m === 'manual');
+            document.getElementById('pane-anchor').classList.toggle('active', m === 'anchor');
+        }
+        document.getElementById('modelSelect').addEventListener('change', function(){
+            document.getElementById('splitRow').style.display = (this.value === 'piano') ? 'flex' : 'none';
+        });
 
         document.getElementById('transcribeForm').onsubmit = async (e) => {
             e.preventDefault();
             const status = document.getElementById('status');
             const btn = document.getElementById('submitBtn');
-            
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            if (mode === 'anchor' && !document.getElementById('anchorFile').files.length) {
+                status.className = "error";
+                status.innerText = "❌ יש לבחור קובץ MIDI בסיס, או לעבור למצב ידני.";
+                return;
+            }
+
             status.className = "loading";
             status.innerText = "⏳ מעבד שמע ב-GPU... ייקח כ-3 שניות";
             btn.disabled = true;
@@ -141,6 +398,15 @@ HTML_CONTENT = """<!DOCTYPE html>
             const formData = new FormData();
             formData.append('file', document.getElementById('audioFile').files[0]);
             formData.append('model', document.getElementById('modelSelect').value);
+            formData.append('mode', mode);
+            formData.append('split_hands', document.getElementById('splitHands').checked);
+            if (mode === 'manual') {
+                formData.append('manual_key_tonic', document.getElementById('keyTonic').value);
+                formData.append('manual_key_mode', document.getElementById('keyMode').value);
+                formData.append('manual_bpm', document.getElementById('manualBpm').value);
+            } else if (mode === 'anchor') {
+                formData.append('anchor_midi', document.getElementById('anchorFile').files[0]);
+            }
 
             try {
                 const res = await fetch('/transcribe', { method: 'POST', body: formData });
@@ -175,20 +441,54 @@ def index():
     return HTML_CONTENT
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), model: str = Form("piano")):
+async def transcribe(
+    file: UploadFile = File(...),
+    model: str = Form("piano"),
+    mode: str = Form("detect"),
+    manual_key_tonic: int = Form(0),
+    manual_key_mode: str = Form("major"),
+    manual_bpm: float = Form(120.0),
+    split_hands: bool = Form(False),
+    anchor_midi: UploadFile = File(None),
+):
     import uuid
     job_id = uuid.uuid4().hex[:8]
-    raw_path = f"uploads/{job_id}_raw"
-    clean_wav_path = f"uploads/{job_id}_clean.wav"
+    src_ext = os.path.splitext(file.filename or "")[1] or ".mp3"
+    raw_path = f"uploads/{job_id}_raw{src_ext}"
+    stem_wav_path = f"uploads/{job_id}_stem.wav"
     output_midi = f"outputs/{job_id}.mid"
-    basic_pitch_out = f"outputs/{job_id}_clean_basic_pitch.mid"
+    basic_pitch_out = f"outputs/{job_id}_stem_basic_pitch.mid"
+    final_midi = f"outputs/{job_id}_final.mid"
+    sep_dir = f"outputs/{job_id}_sep"
+
+    DEMUCS_STEMS = {"piano", "bass", "guitar", "vocals", "other"}
+    if model not in DEMUCS_STEMS:
+        raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
+
+    # output filename follows the original upload's name, swapped to .mid
+    orig_stem = os.path.splitext(file.filename or "transcribed")[0] or "transcribed"
+    download_name = f"{orig_stem}.mid"
 
     try:
         with open(raw_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # המרה ל-WAV תקני
-        conv = subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "32000", "-ac", "1", clean_wav_path], capture_output=True, text=True)
+        # ---- Demucs: real stem separation on the ORIGINAL full-quality audio
+        # (not downsampled first -- that would hurt separation quality) ----
+        demucs_result = subprocess.run(
+            ["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path],
+            capture_output=True, text=True,
+        )
+        if demucs_result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {demucs_result.stderr[-1500:]}")
+
+        raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
+        stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
+        if not os.path.exists(stem_source):
+            raise HTTPException(status_code=500, detail=f"הסטם '{model}' לא נמצא אחרי ההפרדה")
+
+        # המרה ל-WAV תקני -- על הסטם המבודד, לא על כל התערובת
+        conv = subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True, text=True)
         if conv.returncode != 0:
             raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
 
@@ -197,17 +497,51 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("piano")):
                 raise HTTPException(status_code=500, detail="מודל הפסנתר לא זמין")
             from piano_transcription_inference import sample_rate
             import librosa
-            audio, _ = librosa.load(clean_wav_path, sr=sample_rate)
+            audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
             PIANO_MODEL.transcribe(audio, output_midi)
         else:
             from basic_pitch.inference import predict_and_save
-            predict_and_save([clean_wav_path], "outputs", True, False, False, False)
+            predict_and_save([stem_wav_path], "outputs", True, False, False, False)
             output_midi = basic_pitch_out
 
-        if os.path.exists(output_midi):
-            return FileResponse(output_midi, filename="transcribed.mid", media_type="audio/midi")
+        if not os.path.exists(output_midi):
+            raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
 
-        raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
+        # ---- ghost-note cleanup: drop too-short / too-quiet notes, cap pedal-smeared length ----
+        raw_notes_vel = read_midi_notes_and_map(output_midi)["notes"]
+        raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
+        if not raw_notes:
+            raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
+
+        # ---- key + tempo: auto-detected, set manually, or read from an anchor MIDI ----
+        if mode == "anchor":
+            if anchor_midi is None:
+                raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+            anchor_bytes = await anchor_midi.read()
+            anchor_path = f"uploads/{job_id}_anchor.mid"
+            with open(anchor_path, "wb") as f:
+                f.write(anchor_bytes)
+            anchor = read_midi_notes_and_map(anchor_path)
+            anchor_notes3 = [(p, s, e) for p, s, e, v in anchor["notes"]]
+            tonic, is_minor = detect_key(anchor_notes3)
+            tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor_notes3
+        elif mode == "manual":
+            tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
+            tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
+        else:  # "detect": key from the transcription itself, BPM from the audio
+            tonic, is_minor = detect_key(raw_notes)
+            detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
+            tempo_map, timesig_map, anchor_notes = [(0, detected_bpm)], [(0, 4, 4)], []
+
+        snapped = snap_to_key(raw_notes, tonic, is_minor)
+        quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
+        final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands))
+        with open(final_midi, "wb") as f:
+            f.write(final_bytes)
+
+        return FileResponse(final_midi, filename=download_name, media_type="audio/midi")
+    except HTTPException:
+        raise
     except Exception as err:
         print(f"❌ שגיאה בזמן המרה: {err}")
         raise HTTPException(status_code=500, detail=str(err))
