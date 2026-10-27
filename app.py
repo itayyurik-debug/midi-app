@@ -217,8 +217,10 @@ try:
     print("⏳ טוען את מודל הפסנתר ל-GPU מראש...")
     PIANO_MODEL = PianoTranscription(device=DEVICE)
     print("✅ מודל הפסנתר נטען בהצלחה!")
-except Exception as e:
-    print(f"⚠️ שגיאה בטעינת המודל: {e}")
+except Exception:
+    import traceback
+    print("⚠️ שגיאה בטעינת מודל הפסנתר -- המודל הכללי (Basic Pitch) ישמש כגיבוי אוטומטי:")
+    traceback.print_exc()  # full traceback, not just str(e) -- needed to actually diagnose this
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -411,14 +413,20 @@ HTML_CONTENT = """<!DOCTYPE html>
             try {
                 const res = await fetch('/transcribe', { method: 'POST', body: formData });
                 if (res.ok) {
+                    const usedFallback = res.headers.get('X-Used-Fallback');
+                    const disp = res.headers.get('Content-Disposition') || '';
+                    const m = disp.match(/filename="?([^"]+)"?/);
+                    const outName = m ? m[1] : 'transcribed.mid';
                     const blob = await res.blob();
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'transcribed_music.mid';
+                    a.download = outName;
                     a.click();
-                    status.className = "success";
-                    status.innerText = "✅ ההמרה הושלמה! קובץ ה-MIDI הורד בהצלחה.";
+                    status.className = usedFallback ? "loading" : "success";
+                    status.innerText = usedFallback
+                        ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch במקום. הקובץ (" + outName + ") עדיין ירד."
+                        : "✅ ההמרה הושלמה! " + outName + " ירד בהצלחה.";
                 } else {
                     const errData = await res.json();
                     status.className = "error";
@@ -492,14 +500,16 @@ async def transcribe(
         if conv.returncode != 0:
             raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
 
-        if model == "piano":
-            if PIANO_MODEL is None:
-                raise HTTPException(status_code=500, detail="מודל הפסנתר לא זמין")
+        used_fallback = False
+        if model == "piano" and PIANO_MODEL is not None:
             from piano_transcription_inference import sample_rate
             import librosa
             audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
             PIANO_MODEL.transcribe(audio, output_midi)
         else:
+            if model == "piano":
+                used_fallback = True
+                print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
             from basic_pitch.inference import predict_and_save
             predict_and_save([stem_wav_path], "outputs", True, False, False, False)
             output_midi = basic_pitch_out
@@ -539,7 +549,10 @@ async def transcribe(
         with open(final_midi, "wb") as f:
             f.write(final_bytes)
 
-        return FileResponse(final_midi, filename=download_name, media_type="audio/midi")
+        resp = FileResponse(final_midi, filename=download_name, media_type="audio/midi")
+        if used_fallback:
+            resp.headers["X-Used-Fallback"] = "basic_pitch_instead_of_piano_model"
+        return resp
     except HTTPException:
         raise
     except Exception as err:
