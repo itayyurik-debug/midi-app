@@ -9,14 +9,14 @@ import torch
 import gc
 import mido
 
-app = FastAPI(title="Audio to MIDI Pipeline")
+app = FastAPI(title="Professional Audio to Sheet-Music MIDI Pipeline")
 
 MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 PPQ_OUT = 480
 
 # ==========================================
-# 1. MIDI PARSING & UTILITIES
+# 1. MIDI READING & PARSING
 # ==========================================
 def read_midi_notes_and_map(path):
     mid = mido.MidiFile(str(path))
@@ -61,7 +61,7 @@ def read_midi_notes_and_map(path):
     }
 
 # ==========================================
-# 2. CLEANUP, CHORDS & QUANTIZATION
+# 2. PROCESSING & ANALYSIS
 # ==========================================
 def filter_noise(notes, min_duration=0.035, min_velocity=12):
     return [(p, s, e, v) for p, s, e, v in notes if (e - s) >= min_duration and v >= min_velocity]
@@ -81,8 +81,7 @@ def merge_micro_gaps(notes, max_gap_sec=0.065):
     merged.append((curr_p, curr_s, curr_e, curr_v))
     return sorted(merged, key=lambda x: x[1])
 
-def quantize_for_sheet_music(notes, tempo_map, grid_division=16):
-    bpm = tempo_map[0][1] if tempo_map else 120.0
+def quantize_for_sheet_music(notes, bpm, grid_division=16):
     grid_ticks = PPQ_OUT // (grid_division // 4)
     sec_per_tick = 60.0 / (bpm * PPQ_OUT)
     quantized = []
@@ -131,13 +130,12 @@ def detect_key(notes):
 # ==========================================
 # 3. BUILD OUTPUT MIDI
 # ==========================================
-def build_output_midi_bytes(notes, tempo_map, timesig_map, is_quantized=True, add_chords=False):
+def build_output_midi_bytes(notes, bpm, timesig=(4, 4), is_quantized=True, add_chords=False):
     out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
     meta_track = mido.MidiTrack()
     
-    bpm = tempo_map[0][1] if tempo_map else 120.0
     meta_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
-    meta_track.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    meta_track.append(mido.MetaMessage("time_signature", numerator=timesig[0], denominator=timesig[1], time=0))
 
     if is_quantized and add_chords:
         chords = detect_chords(notes)
@@ -201,7 +199,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <title>ממיר שמע ל-MIDI</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1e293bcc; backdrop-filter: blur(6px); border-radius: 16px; padding: 28px; max-width: 480px; width: 100%; text-align: center; border: 1px solid #334155; }
+        .card { background: #1e293bcc; backdrop-filter: blur(6px); border-radius: 16px; padding: 28px; max-width: 500px; width: 100%; text-align: center; border: 1px solid #334155; }
         h1 { font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; }
         p { color: #94a3b8; font-size: 0.88rem; margin-bottom: 20px; }
         .upload-box { border: 2px dashed #0284c7; border-radius: 12px; padding: 20px; cursor: pointer; background: #0f172a; margin-bottom: 16px; }
@@ -216,6 +214,10 @@ HTML_CONTENT = """<!DOCTYPE html>
         .modebar label:has(input:checked) { border-color: #38bdf8; color: #38bdf8; font-weight: bold; }
         .modepane { display: none; text-align: right; margin-top: 10px; }
         .modepane.active { display: block; }
+        .field-group { margin-top: 10px; text-align: right; }
+        .field-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+        .row2 { display: flex; gap: 10px; }
+        .row2 > div { flex: 1; }
     </style>
 </head>
 <body>
@@ -238,9 +240,13 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             <select id="outputMode">
                 <option value="sheet">🎼 מיושר לתווים (יישור לקצב וסיומת נקייה)</option>
-                <option value="sheet_chords">🎼 מיושר לתווים + זיהוי אקורדים</option>
                 <option value="raw">⚡ MIDI גולמי (ללא יישור לקצב)</option>
             </select>
+
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
+                <input type="checkbox" id="addChords" checked style="width:auto">
+                ייצוא עם שמות אקורדים
+            </label>
 
             <div class="modebar">
                 <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>זיהוי אוטומטי</span></label>
@@ -249,17 +255,59 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
 
             <div class="modepane active" id="pane-detect">
-                <p style="color:#64748b;font-size:0.75rem;">זיהוי מקצב וסולם אוטומטי מהקובץ.</p>
+                <p style="color:#64748b;font-size:0.75rem;">זיהוי מקצב, סולם ומשקל אוטומטי מהקובץ.</p>
             </div>
 
             <div class="modepane" id="pane-manual">
-                <label style="font-size:0.8rem;color:#94a3b8">קצב (BPM)</label>
-                <input type="number" id="manualBpm" value="120">
+                <div class="field-group">
+                    <label>קצב (BPM)</label>
+                    <select id="bpmMode" onchange="document.getElementById('manualBpmInput').style.display = this.value === 'custom' ? 'block' : 'none'">
+                        <option value="auto">זיהוי אוטומטי</option>
+                        <option value="custom">קביעה ידנית</option>
+                    </select>
+                    <input type="number" id="manualBpmInput" value="120" style="display:none;" placeholder="הזן BPM">
+                </div>
+
+                <div class="field-group">
+                    <label>סולם</label>
+                    <select id="keyModeSelect" onchange="document.getElementById('keyGroup').style.display = this.value === 'custom' ? 'flex' : 'none'">
+                        <option value="auto">זיהוי אוטומטי</option>
+                        <option value="custom">קביעה ידנית</option>
+                    </select>
+                    <div class="row2" id="keyGroup" style="display:none;margin-top:6px;">
+                        <select id="keyTonic">
+                            <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
+                            <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
+                            <option value="6">F#</option><option value="7">G</option><option value="8">G#</option>
+                            <option value="9">A</option><option value="10">A#</option><option value="11">B</option>
+                        </select>
+                        <select id="keyScale">
+                            <option value="major">מז'ור</option>
+                            <option value="minor">מינור</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label>משקל</label>
+                    <select id="timeSigSelect">
+                        <option value="auto">זיהוי אוטומטי (4/4)</option>
+                        <option value="4/4">4/4</option>
+                        <option value="3/4">3/4</option>
+                        <option value="6/8">6/8</option>
+                        <option value="2/4">2/4</option>
+                    </select>
+                </div>
             </div>
 
             <div class="modepane" id="pane-anchor">
-                <label style="font-size:0.8rem;color:#94a3b8">קובץ MIDI בסיס לסינכרון</label>
-                <input type="file" id="anchorFile" accept=".mid,.midi">
+                <div class="field-group">
+                    <label>קובץ MIDI בסיס לסינכרון</label>
+                    <div class="upload-box" style="margin-top:6px;padding:12px;" onclick="document.getElementById('anchorFile').click()">
+                        <span id="anchorFileName">🎼 לחץ לבחירת קובץ MIDI</span>
+                        <input type="file" id="anchorFile" accept=".mid,.midi" onchange="document.getElementById('anchorFileName').innerText = '📄 ' + this.files[0].name">
+                    </div>
+                </div>
             </div>
 
             <button type="submit" id="submitBtn">המר ל-MIDI 🚀</button>
@@ -288,11 +336,18 @@ HTML_CONTENT = """<!DOCTYPE html>
             formData.append('file', fileInput.files[0]);
             formData.append('model', document.getElementById('modelSelect').value);
             formData.append('output_mode', document.getElementById('outputMode').value);
+            formData.append('add_chords', document.getElementById('addChords').checked);
             
             const mode = document.querySelector('input[name="mode"]:checked').value;
             formData.append('mode', mode);
+
             if (mode === 'manual') {
-                formData.append('manual_bpm', document.getElementById('manualBpm').value);
+                formData.append('bpm_mode', document.getElementById('bpmMode').value);
+                formData.append('manual_bpm', document.getElementById('manualBpmInput').value);
+                formData.append('key_mode_select', document.getElementById('keyModeSelect').value);
+                formData.append('key_tonic', document.getElementById('keyTonic').value);
+                formData.append('key_scale', document.getElementById('keyScale').value);
+                formData.append('time_sig_select', document.getElementById('timeSigSelect').value);
             } else if (mode === 'anchor' && document.getElementById('anchorFile').files.length) {
                 formData.append('reference_midi', document.getElementById('anchorFile').files[0]);
             }
@@ -310,8 +365,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                     status.style.color = "#4ade80";
                     status.innerText = "✅ ירד בהצלחה: " + baseName + ".mid";
                 } else {
+                    const errData = await res.json();
                     status.style.color = "#f87171";
-                    status.innerText = "❌ שגיאה בזמן העיבוד";
+                    status.innerText = "❌ שגיאה: " + (errData.detail || "עיבוד נכשל");
                 }
             } catch (err) {
                 status.style.color = "#f87171";
@@ -332,8 +388,14 @@ async def transcribe(
     file: UploadFile = File(...),
     model: str = Form("piano"),
     output_mode: str = Form("sheet"),
+    add_chords: bool = Form(True),
     mode: str = Form("detect"),
+    bpm_mode: str = Form("auto"),
     manual_bpm: float = Form(120.0),
+    key_mode_select: str = Form("auto"),
+    key_tonic: int = Form(0),
+    key_scale: str = Form("major"),
+    time_sig_select: str = Form("auto"),
     reference_midi: UploadFile = File(None)
 ):
     import uuid
@@ -369,10 +431,11 @@ async def transcribe(
             predict_and_save([stem_wav_path], "outputs", True, False, False, False)
             output_midi = f"outputs/{job_id}_stem_basic_pitch.mid"
 
-        # 3. Reading Notes & BPM
+        # 3. Reading Notes
         raw_notes = read_midi_notes_and_map(output_midi)["notes"]
         
-        if mode == "manual":
+        # Determine BPM
+        if mode == "manual" and bpm_mode == "custom":
             bpm = manual_bpm
         elif mode == "anchor" and reference_midi is not None:
             ref_bytes = await reference_midi.read()
@@ -383,22 +446,25 @@ async def transcribe(
         else:
             bpm = detect_bpm_from_audio(raw_path)
 
-        tempo_map = [(0, bpm)]
-        timesig_map = [(0, 4, 4)]
+        # Determine Time Signature
+        if mode == "manual" and time_sig_select != "auto":
+            num, den = map(int, time_sig_select.split('/'))
+            timesig = (num, den)
+        else:
+            timesig = (4, 4)
 
-        # 4. Processing
+        # 4. Processing Pipeline
         cleaned = filter_noise(raw_notes)
         cleaned = merge_micro_gaps(cleaned)
 
-        is_quant = output_mode in ["sheet", "sheet_chords"]
-        add_chords = output_mode == "sheet_chords"
+        is_quant = output_mode == "sheet"
 
         if is_quant:
-            processed_notes = quantize_for_sheet_music(cleaned, tempo_map)
+            processed_notes = quantize_for_sheet_music(cleaned, bpm=bpm)
         else:
             processed_notes = cleaned
 
-        final_bytes = build_output_midi_bytes(processed_notes, tempo_map, timesig_map, is_quantized=is_quant, add_chords=add_chords)
+        final_bytes = build_output_midi_bytes(processed_notes, bpm=bpm, timesig=timesig, is_quantized=is_quant, add_chords=bool(add_chords))
 
         with open(final_midi, "wb") as f: f.write(final_bytes)
         return FileResponse(final_midi, filename="transcribed.mid", media_type="audio/midi")
