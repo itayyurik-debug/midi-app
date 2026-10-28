@@ -8,15 +8,17 @@ import subprocess
 import torch
 import gc
 import mido
-import math
 
-app = FastAPI(title="Professional Audio to Sheet-Music MIDI Pipeline")
+app = FastAPI(title="Audio to MIDI Pipeline")
 
+# ---------- key detection + tempo-map quantization (shared with the local-pipeline project) ----------
 MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 PPQ_OUT = 480
 
+
 def read_midi_notes_and_map(path):
+    """Read any standard MIDI file -> full tempo map, time-sig map, notes as (pitch, start_sec, end_sec)."""
     mid = mido.MidiFile(str(path))
     ppq = mid.ticks_per_beat
     tempo_events, timesig_events, notes = [], [], []
@@ -35,119 +37,201 @@ def read_midi_notes_and_map(path):
                 if msg.note in active:
                     start_tick, vel = active.pop(msg.note)
                     notes.append((msg.note, start_tick, time, vel))
-    
-    if not tempo_events: tempo_events = [(0, 500000)]
+    if not tempo_events:
+        tempo_events = [(0, 500000)]
     tempo_events.sort()
-    if tempo_events[0][0] > 0: tempo_events.insert(0, (0, tempo_events[0][1]))
-    if not timesig_events: timesig_events = [(0, 4, 4)]
+    if tempo_events[0][0] > 0:
+        tempo_events.insert(0, (0, tempo_events[0][1]))
+    if not timesig_events:
+        timesig_events = [(0, 4, 4)]
     timesig_events.sort()
-    if timesig_events[0][0] > 0: timesig_events.insert(0, (0, timesig_events[0][1], timesig_events[0][2]))
+    if timesig_events[0][0] > 0:
+        timesig_events.insert(0, (0, timesig_events[0][1], timesig_events[0][2]))
 
     def tick_to_sec(tick):
         sec = 0.0
         for i, (t_start, us) in enumerate(tempo_events):
             t_end = tempo_events[i + 1][0] if i + 1 < len(tempo_events) else float("inf")
-            if tick <= t_start: break
+            if tick <= t_start:
+                break
             sec += (min(tick, t_end) - t_start) * (us / 1e6) / ppq
-            if tick <= t_end: break
+            if tick <= t_end:
+                break
         return sec
 
-    return {
-        "tempo_map": [(tick_to_sec(t), round(60e6/us)) for t, us in tempo_events],
-        "timesig_map": [(tick_to_sec(t), n, d) for t, n, d in timesig_events],
-        "notes": [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
-    }
+    tempo_map = [(tick_to_sec(t), round(60e6 / us)) for t, us in tempo_events]
+    timesig_map = [(tick_to_sec(t), n, d) for t, n, d in timesig_events]
+    note_list = [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
+    return {"tempo_map": tempo_map, "timesig_map": timesig_map, "notes": note_list}
 
-def filter_noise(notes, min_duration=0.035, min_velocity=12):
-    return [(p, s, e, v) for p, s, e, v in notes if (e - s) >= min_duration and v >= min_velocity]
 
-def merge_micro_gaps(notes, max_gap_sec=0.065):
-    if not notes: return []
-    sorted_notes = sorted(notes, key=lambda x: (x[0], x[1]))
-    merged = []
-    curr_p, curr_s, curr_e, curr_v = sorted_notes[0]
-    for n_p, n_s, n_e, n_v in sorted_notes[1:]:
-        if n_p == curr_p and (n_s - curr_e) <= max_gap_sec:
-            curr_e = max(curr_e, n_e)
-            curr_v = max(curr_v, n_v)
-        else:
-            merged.append((curr_p, curr_s, curr_e, curr_v))
-            curr_p, curr_s, curr_e, curr_v = n_p, n_s, n_e, n_v
-    merged.append((curr_p, curr_s, curr_e, curr_v))
-    return sorted(merged, key=lambda x: x[1])
+def filter_ghost_notes(notes_with_vel, min_duration=0.03, min_velocity=15, max_duration=4.0):
+    """Drop too-short / too-quiet notes (ghost notes), and cap note length to tame
+    sustain-pedal smearing. Returns plain (pitch, start, end) tuples (velocity dropped
+    after filtering -- the output MIDI always writes a fixed velocity)."""
+    out = []
+    for pitch, start, end, vel in notes_with_vel:
+        dur = end - start
+        if dur < min_duration or vel < min_velocity:
+            continue
+        if dur > max_duration:
+            end = start + max_duration
+        out.append((pitch, start, end))
+    return out
 
-def quantize_for_sheet_music(notes, bpm, grid_division=16):
-    grid_ticks = PPQ_OUT // (grid_division // 4)
-    sec_per_tick = 60.0 / (bpm * PPQ_OUT)
-    quantized = []
-    for pitch, start_sec, end_sec, vel in notes:
-        s_tick = int(start_sec / sec_per_tick)
-        e_tick = int(end_sec / sec_per_tick)
-        q_start = round(s_tick / grid_ticks) * grid_ticks
-        q_end = round(e_tick / grid_ticks) * grid_ticks
-        if q_end <= q_start: q_end = q_start + grid_ticks
-        quantized.append((pitch, max(0, q_start), q_end - q_start, vel))
-    return quantized
 
-def detect_chords(quantized_notes):
-    beats = {}
-    for pitch, s_tick, d_tick, vel in quantized_notes:
-        beat_idx = s_tick // PPQ_OUT
-        if beat_idx not in beats: beats[beat_idx] = []
-        beats[beat_idx].append(pitch % 12)
-    
-    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-    chord_markers = []
-    for beat, pitches in beats.items():
-        unique_pitches = list(set(pitches))
-        if len(unique_pitches) >= 3:
-            root = unique_pitches[0]
-            chord_markers.append((beat * PPQ_OUT, mido.MetaMessage('text', text=note_names[root])))
-    return chord_markers
+def remove_octave_overtones(notes, time_tolerance=0.05):
+    """Drop a note that starts almost exactly when another note starts one or two
+    octaves below it and lasts no longer -- a common false-positive when a bass
+    note's harmonic resonance gets mis-detected as a separate note."""
+    out = []
+    for i, (pitch, start, end) in enumerate(notes):
+        is_overtone = False
+        for j, (pitch2, start2, end2) in enumerate(notes):
+            if i == j or pitch2 == pitch:
+                continue
+            if (pitch - pitch2) in (12, 24) and abs(start - start2) <= time_tolerance and (end - start) <= (end2 - start2) + time_tolerance:
+                is_overtone = True
+                break
+        if not is_overtone:
+            out.append((pitch, start, end))
+    return out
+
+
+# ---------- chroma DTW: only used when a reference MIDI is uploaded, to align its
+# tempo/structure to the ACTUAL timing of the performance (tempo drift, rubato, etc.) ----------
+def _audio_chroma(wav_path, hop_length=512, sr_target=22050):
+    import librosa
+    y, sr = librosa.load(wav_path, sr=sr_target)
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+    return chroma, hop_length, sr
+
+
+def _midi_notes_to_chroma(notes4, duration_sec, hop_length, sr):
+    import numpy as np
+    frame_time = hop_length / sr
+    n_frames = max(1, int(duration_sec / frame_time) + 1)
+    chroma = np.zeros((12, n_frames))
+    for pitch, start, end, *_ in notes4:
+        f0, f1 = int(start / frame_time), min(n_frames, int(end / frame_time) + 1)
+        if f1 > f0:
+            chroma[pitch % 12, f0:f1] += 1.0
+    norms = np.linalg.norm(chroma, axis=0, keepdims=True)
+    norms[norms == 0] = 1.0
+    return chroma / norms
+
+
+def align_reference_to_performance(anchor_notes4, anchor_tempo_map, anchor_timesig_map, perf_wav_path):
+    """Returns (warped_tempo_map, warped_timesig_map, warped_notes3) with every time
+    value remapped from the reference MIDI's own timeline onto the real timing of
+    perf_wav_path, via chroma + DTW. Raises on failure -- caller should catch and
+    fall back to the unwarped anchor data rather than block the user."""
+    import librosa
+    chroma_perf, hop_length, sr = _audio_chroma(perf_wav_path)
+    ref_duration = max((e for _, _, e, *_ in anchor_notes4), default=1.0)
+    chroma_ref = _midi_notes_to_chroma(anchor_notes4, ref_duration, hop_length, sr)
+    _, wp = librosa.sequence.dtw(X=chroma_ref, Y=chroma_perf, metric="cosine")
+    frame_time = hop_length / sr
+    path = sorted(((r * frame_time, p * frame_time) for r, p in wp), key=lambda x: x[0])
+
+    def warp(t_ref):
+        if t_ref <= path[0][0]:
+            return path[0][1]
+        if t_ref >= path[-1][0]:
+            return path[-1][1]
+        for i in range(1, len(path)):
+            r0, p0 = path[i - 1]
+            r1, p1 = path[i]
+            if r0 <= t_ref <= r1:
+                return p0 if r1 == r0 else p0 + (t_ref - r0) / (r1 - r0) * (p1 - p0)
+        return path[-1][1]
+
+    warped_tempo_map = [(warp(t), bpm) for t, bpm in anchor_tempo_map]
+    warped_timesig_map = [(warp(t), n, d) for t, n, d in anchor_timesig_map]
+    warped_notes = [(p, warp(s), warp(e)) for p, s, e, v in anchor_notes4]
+    return warped_tempo_map, warped_timesig_map, warped_notes
+
 
 def detect_bpm_from_audio(wav_path):
-    import librosa, numpy as np
+    """Audio-only tempo estimate, for the 'auto-detect' mode when no anchor MIDI is given."""
+    import numpy as np
+    import librosa
     y, sr = librosa.load(wav_path, sr=None)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
     return float(np.atleast_1d(tempo)[0])
 
-def build_output_midi_bytes(notes, tempo_map_events, timesig_events, is_quantized=True, add_chords=False):
-    out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
-    meta_track = mido.MidiTrack()
-    
-    for t_sec, bpm in tempo_map_events:
-        meta_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
-    
-    for t_sec, num, den in timesig_events:
-        midi_den = int(math.log2(den)) if den > 0 else 2
-        meta_track.append(mido.MetaMessage("time_signature", numerator=num, denominator=midi_den, time=0))
 
-    if is_quantized and add_chords:
-        chords = detect_chords(notes)
-        last_t = 0
-        for tick, msg in chords:
-            msg.time = max(0, tick - last_t)
-            meta_track.append(msg)
-            last_t = max(last_t, tick)
+def detect_key(notes):
+    hist = [0.0] * 12
+    for pitch, start, end in notes:
+        hist[pitch % 12] += max(0.05, end - start)
+    best = (-1e18, 0, False)
+    for tonic in range(12):
+        for profile, is_minor in ((MAJ_PROFILE, False), (MIN_PROFILE, True)):
+            score = sum(hist[(i + tonic) % 12] * profile[i] for i in range(12))
+            if score > best[0]:
+                best = (score, tonic, is_minor)
+    return best[1], best[2]
 
-    out_mid.tracks.append(meta_track)
 
+def snap_to_key(notes, tonic, is_minor):
+    scale = {(x + tonic) % 12 for x in ([0, 2, 3, 5, 7, 8, 10] if is_minor else [0, 2, 4, 5, 7, 9, 11])}
+    out = []
+    for pitch, start, end in notes:
+        pc = pitch % 12
+        if pc in scale:
+            out.append((pitch, start, end))
+            continue
+        best_s, best_d = pc, 99
+        for s in scale:
+            d = min(abs(s - pc), 12 - abs(s - pc))
+            if d < best_d:
+                best_d, best_s = d, s
+        new_pitch = pitch + ((best_s - pc + 18) % 12 - 6) if best_d <= 1 else pitch
+        out.append((new_pitch, start, end))
+    return out
+
+
+def build_segments(tempo_map, ppq):
+    segs, tick = [], 0.0
+    for i, (t, bpm) in enumerate(tempo_map):
+        if i > 0:
+            prev_t, prev_bpm = tempo_map[i - 1]
+            tick += (t - prev_t) * (prev_bpm / 60.0) * ppq
+        segs.append((t, bpm, tick))
+    return segs
+
+
+def sec_to_tick(sec, segs):
+    for t, bpm, tick in reversed(segs):
+        if sec >= t:
+            return tick + (sec - t) * (bpm / 60.0) * PPQ_OUT
+    return 0.0
+
+
+def quantize_notes(bp_notes, tempo_map, anchor_notes):
+    segs = build_segments(tempo_map, PPQ_OUT)
+    grid = PPQ_OUT // 4
+    phase = 0
+    if anchor_notes:
+        offsets = sorted(int(sec_to_tick(s, segs)) % grid for _, s, _ in anchor_notes)
+        phase = offsets[len(offsets) // 2]
+    out = []
+    for pitch, start, end in bp_notes:
+        s_tick = sec_to_tick(start, segs)
+        e_tick = sec_to_tick(end, segs)
+        q_s = round((s_tick - phase) / grid) * grid + phase
+        q_d = max(grid, round((e_tick - s_tick) / grid) * grid)
+        out.append((pitch, max(0, int(q_s)), int(q_d)))
+    return out, segs
+
+
+def _notes_track(notes, channel=0):
     tr = mido.MidiTrack()
     evs = []
-    
-    bpm_start = tempo_map_events[0][1] if tempo_map_events else 120.0
-    sec_per_tick = 60.0 / (bpm_start * PPQ_OUT)
-
-    for p, s, d_or_e, v in notes:
-        if is_quantized:
-            s_tick = s
-            d_tick = d_or_e
-        else:
-            s_tick = int(s / sec_per_tick)
-            d_tick = int((d_or_e - s) / sec_per_tick)
-        evs.append((s_tick, mido.Message("note_on", note=int(p), velocity=int(v), channel=0)))
-        evs.append((s_tick + d_tick, mido.Message("note_off", note=int(p), velocity=0, channel=0)))
-
+    for pitch, s_tick, d_tick in notes:
+        evs.append((s_tick, mido.Message("note_on", note=int(pitch), velocity=90, channel=channel)))
+        evs.append((s_tick + d_tick, mido.Message("note_off", note=int(pitch), velocity=0, channel=channel)))
     evs.sort(key=lambda e: e[0])
     last_t = 0
     for tick, msg in evs:
@@ -155,84 +239,114 @@ def build_output_midi_bytes(notes, tempo_map_events, timesig_events, is_quantize
         tr.append(msg)
         last_t = max(last_t, tick)
     tr.append(mido.MetaMessage("end_of_track"))
-    out_mid.tracks.append(tr)
+    return tr
 
+
+def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split_hands=False):
+    events = []
+    for t, bpm in tempo_map:
+        events.append((sec_to_tick(t, segs), mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm))))
+    for t, num, den in timesig_map:
+        events.append((sec_to_tick(t, segs), mido.MetaMessage("time_signature", numerator=num, denominator=den)))
+    events.sort(key=lambda e: e[0])
+    meta_track = mido.MidiTrack()
+    last = 0.0
+    for tick, msg in events:
+        msg.time = max(0, round(tick - last))
+        meta_track.append(msg)
+        last = max(last, tick)
+    meta_track.append(mido.MetaMessage("end_of_track"))
+
+    out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
+    out_mid.tracks.append(meta_track)
+    if split_hands:
+        # Right hand (treble): pitch >= 60 (middle C). Left hand (bass): below.
+        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] >= 60], channel=0))
+        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] < 60], channel=1))
+    else:
+        out_mid.tracks.append(_notes_track(quantized_notes, channel=0))
     buf = io.BytesIO()
     out_mid.save(file=buf)
     return buf.getvalue()
 
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"⚡ מפעיל התקן עיבוד: {DEVICE}")
+
 PIANO_MODEL = None
 try:
     from piano_transcription_inference import PianoTranscription
+    print("⏳ טוען את מודל הפסנתר ל-GPU מראש...")
     PIANO_MODEL = PianoTranscription(device=DEVICE)
+    print("✅ מודל הפסנתר נטען בהצלחה!")
 except Exception:
-    pass
+    import traceback
+    print("⚠️ שגיאה בטעינת מודל הפסנתר -- המודל הכללי (Basic Pitch) ישמש כגיבוי אוטומטי:")
+    traceback.print_exc()  # full traceback, not just str(e) -- needed to actually diagnose this
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ממיר שמע ל-MIDI</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1e293bcc; backdrop-filter: blur(6px); border-radius: 16px; padding: 28px; max-width: 500px; width: 100%; text-align: center; border: 1px solid #334155; }
-        h1 { font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; }
-        p { color: #94a3b8; font-size: 0.88rem; margin-bottom: 20px; }
-        .upload-box { border: 2px dashed #0284c7; border-radius: 12px; padding: 20px; cursor: pointer; background: #0f172a; margin-bottom: 16px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
+        #bgCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+        .card { position: relative; z-index: 1; background: #1e293bcc; backdrop-filter: blur(6px); border-radius: 16px; padding: 28px; max-width: 480px; width: 100%; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); text-align: center; border: 1px solid #334155; }
+        h1 { font-size: 1.6rem; margin-bottom: 8px; color: #38bdf8; }
+        p { color: #94a3b8; font-size: 0.95rem; margin-bottom: 24px; line-height: 1.4; }
+        .upload-box { border: 2px dashed #0284c7; border-radius: 12px; padding: 24px; cursor: pointer; margin-bottom: 16px; background: #0f172a; transition: 0.2s; }
+        .upload-box:hover { border-color: #38bdf8; background: #1e293b; }
         input[type="file"] { display: none; }
-        select, button, input[type="number"] { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #475569; margin-top: 10px; font-size: 0.95rem; box-sizing: border-box; }
-        select, input { background: #0f172a; color: white; }
-        button { background: #0284c7; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 18px; }
-        #status { margin-top: 16px; font-size: 0.9rem; font-weight: bold; }
-        .modebar { display: flex; gap: 8px; margin-top: 14px; }
-        .modebar label { flex: 1; padding: 8px; border: 1px solid #475569; border-radius: 8px; font-size: 0.8rem; cursor: pointer; background: #0f172a; }
+        select, button { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #475569; margin-top: 12px; font-size: 1rem; font-weight: 600; box-sizing: border-box; }
+        select { background: #0f172a; color: white; outline: none; }
+        button { background: #0284c7; color: white; border: none; cursor: pointer; transition: 0.2s; margin-top: 20px; }
+        button:hover { background: #0369a1; }
+        button:active { transform: scale(.97); }
+        #status { margin-top: 18px; font-size: 0.95rem; font-weight: bold; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; font-size: 0.85rem; word-break: break-all; }
+        .loading { color: #facc15; }
+        .modebar { display: flex; gap: 8px; margin-top: 16px; }
+        .modebar label { flex: 1; text-align: center; padding: 9px 6px; border: 1px solid #475569; border-radius: 8px; font-size: 0.82rem; cursor: pointer; color: #94a3b8; }
         .modebar input { display: none; }
-        .modebar label:has(input:checked) { border-color: #38bdf8; color: #38bdf8; font-weight: bold; }
-        .modepane { display: none; text-align: right; margin-top: 10px; }
+        .modebar label:has(input:checked) { border-color: #38bdf8; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.08); }
+        .modepane { display: none; text-align: right; }
         .modepane.active { display: block; }
-        .field-group { margin-top: 10px; text-align: right; }
-        .field-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
         .row2 { display: flex; gap: 10px; }
         .row2 > div { flex: 1; }
-        optgroup { background: #1e293b; color: #94a3b8; font-weight: bold; }
-        option { color: #f8fafc; }
+        .fieldlabel { display: block; font-size: 0.8rem; color: #94a3b8; margin: 10px 0 4px; }
     </style>
 </head>
 <body>
+    <canvas id="bgCanvas"></canvas>
     <div class="card">
         <h1>🎹 ממיר שמע ל-MIDI</h1>
-        <p>תמלול שמע מקצועי עם יישור לתווים וזיהוי אקורדים</p>
+        <p>העלה קובץ MP3 או שמע מהאייפד והמר אותו לקובץ MIDI נקי</p>
         <form id="transcribeForm">
             <div class="upload-box" onclick="document.getElementById('audioFile').click()">
-                <span id="fileName">📁 לחץ לבחירת קובץ MP3 / WAV</span>
-                <input type="file" id="audioFile" required onchange="document.getElementById('fileName').innerText = '📄 ' + this.files[0].name">
+                <span id="fileName">📁 לחץ כאן לבחירת קובץ MP3</span>
+                <input type="file" id="audioFile" name="file" accept="audio/*,.mp3,.wav,.m4a" required onchange="updateFileName(this)">
             </div>
-
-            <select id="modelSelect">
-                <option value="piano">🎹 פסנתר (Demucs + Piano Engine)</option>
+            <select name="model" id="modelSelect">
+                <option value="piano">🎹 פסנתר (Demucs + Piano Transcription)</option>
                 <option value="bass">🎸 בס (Demucs + Basic Pitch)</option>
                 <option value="guitar">🎸 גיטרה (Demucs + Basic Pitch)</option>
                 <option value="vocals">🎤 שירה (Demucs + Basic Pitch)</option>
-                <option value="other">🎻 שאר הכלים (Demucs + Basic Pitch)</option>
+                <option value="other">🎻 שאר הכלים (סטם "other" של Demucs + Basic Pitch)</option>
             </select>
-
-            <select id="outputMode">
-                <option value="sheet">🎼 מיושר לתווים (יישור לקצב וסיומת נקייה)</option>
-                <option value="raw">⚡ MIDI ללא יישור לקצב</option>
-            </select>
-
-            <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
-                <input type="checkbox" id="addChords" checked style="width:auto">
-                ייצוא עם שמות אקורדים
-            </label>
+            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">כל בחירה מפעילה קודם הפרדת Demucs אמיתית, ורק אז מתמללת את הכלי המבודד -- לא את כל התערובת.</p>
 
             <div class="modebar">
                 <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>זיהוי אוטומטי</span></label>
@@ -241,107 +355,165 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
 
             <div class="modepane active" id="pane-detect">
-                <p style="color:#64748b;font-size:0.75rem;">זיהוי מקצב, סולם ומשקל אוטומטי מהקובץ.</p>
+                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">הסולם יזוהה מתוך התווים שתומללו, והקצב (BPM) מתוך האודיו עצמו (librosa.beat_track). לא צריך להעלות שום דבר נוסף.</p>
             </div>
 
             <div class="modepane" id="pane-manual">
-                <div class="field-group">
-                    <label>קצב (BPM)</label>
-                    <select id="bpmMode" onchange="document.getElementById('manualBpmInput').style.display = this.value === 'custom' ? 'block' : 'none'">
-                        <option value="auto">זיהוי אוטומטי</option>
-                        <option value="custom">קביעה ידנית</option>
-                    </select>
-                    <input type="number" id="manualBpmInput" value="120" style="display:none;" placeholder="הזן BPM">
+                <div class="row2">
+                    <div>
+                        <label class="fieldlabel">סולם</label>
+                        <select id="keyTonic">
+                            <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
+                            <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
+                            <option value="6">F#</option><option value="7">G</option><option value="8">G#</option>
+                            <option value="9">A</option><option value="10">A#</option><option value="11">B</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="fieldlabel">מז'ור/מינור</label>
+                        <select id="keyMode"><option value="major">מז'ור</option><option value="minor">מינור</option></select>
+                    </div>
                 </div>
-
-                <div class="field-group">
-                    <label>משקל</label>
-                    <select id="timeSigSelect">
-                        <option value="auto">זיהוי אוטומטי (4/4)</option>
-                        <optgroup label="רבעים">
-                            <option value="1/4">1/4</option><option value="2/4">2/4</option><option value="3/4">3/4</option><option value="4/4">4/4</option><option value="5/4">5/4</option><option value="6/4">6/4</option><option value="7/4">7/4</option>
-                        </optgroup>
-                        <optgroup label="שמיניות">
-                            <option value="3/8">3/8</option><option value="5/8">5/8</option><option value="6/8">6/8</option><option value="7/8">7/8</option><option value="9/8">9/8</option><option value="11/8">11/8</option><option value="12/8">12/8</option><option value="13/8">13/8</option><option value="15/8">15/8</option>
-                        </optgroup>
-                        <optgroup label="חלקי 16">
-                            <option value="5/16">5/16</option><option value="7/16">7/16</option><option value="9/16">9/16</option>
-                        </optgroup>
-                    </select>
-                </div>
+                <label class="fieldlabel">קצב (BPM)</label>
+                <input type="number" id="manualBpm" value="120" style="width:100%;padding:12px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:white;box-sizing:border-box;">
             </div>
 
             <div class="modepane" id="pane-anchor">
-                <div class="field-group">
-                    <label>קובץ MIDI בסיס לסינכרון</label>
-                    <div class="upload-box" style="margin-top:6px;padding:12px;" onclick="document.getElementById('anchorFile').click()">
-                        <span id="anchorFileName">🎼 לחץ לבחירת קובץ MIDI</span>
-                        <input type="file" id="anchorFile" accept=".mid,.midi" onchange="document.getElementById('anchorFileName').innerText = '📄 ' + this.files[0].name">
-                    </div>
-                </div>
+                <label class="fieldlabel">קובץ MIDI בסיס</label>
+                <input type="file" id="anchorFile" accept=".mid,.midi" style="display:block;width:100%;color:#94a3b8;font-size:0.85rem;">
+                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">הסולם, מפת הטמפו ומקצב (כולל שינויים באמצע השיר) ייקראו אוטומטית מהקובץ הזה.</p>
             </div>
+
+            <label id="splitRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:14px;text-align:right">
+                <input type="checkbox" id="splitHands" style="width:auto">
+                פיצול לשתי ידיים (ליד ימין/שמאל, רק לפסנתר)
+            </label>
 
             <button type="submit" id="submitBtn">המר ל-MIDI 🚀</button>
         </form>
         <div id="status"></div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script>
+    (function(){
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !window.THREE) return;
+        const canvas = document.getElementById('bgCanvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 8;
+
+        scene.add(new THREE.AmbientLight(0x3a2410, 1.4));
+        const key = new THREE.PointLight(0xffb347, 2.2, 60); key.position.set(6, 6, 6); scene.add(key);
+        const rim = new THREE.PointLight(0xff7a1a, 1.2, 60); rim.position.set(-6, -3, -4); scene.add(rim);
+
+        const amberMat = () => new THREE.MeshStandardMaterial({ color: 0xe08a2e, roughness: 0.35, metalness: 0.55, transparent: true, opacity: 0.55 });
+        const shapes = [
+            new THREE.Mesh(new THREE.IcosahedronGeometry(1.7, 0), amberMat()),
+            new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.35, 16, 64), amberMat()),
+            new THREE.Mesh(new THREE.IcosahedronGeometry(0.9, 1), amberMat()),
+        ];
+        shapes[0].position.set(-3.6, 1.6, -2);
+        shapes[1].position.set(3.3, -1.8, -3);
+        shapes[2].position.set(2.6, 2.3, -4.5);
+        shapes.forEach(s => scene.add(s));
+
+        function animate(t) {
+            shapes.forEach((m, i) => {
+                m.rotation.x = t * 0.00018 * (i + 1);
+                m.rotation.y = t * 0.00013 * (i + 1);
+                m.position.y += Math.sin(t * 0.0004 + i) * 0.0012;
+            });
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+        requestAnimationFrame(animate);
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    })();
+    </script>
+    <script>
+        function updateFileName(input) {
+            if (input.files.length > 0) {
+                document.getElementById('fileName').innerText = "📄 " + input.files[0].name;
+            }
+        }
         function setMode(m) {
             document.getElementById('pane-detect').classList.toggle('active', m === 'detect');
             document.getElementById('pane-manual').classList.toggle('active', m === 'manual');
             document.getElementById('pane-anchor').classList.toggle('active', m === 'anchor');
         }
+        document.getElementById('modelSelect').addEventListener('change', function(){
+            document.getElementById('splitRow').style.display = (this.value === 'piano') ? 'flex' : 'none';
+        });
 
         document.getElementById('transcribeForm').onsubmit = async (e) => {
             e.preventDefault();
-            const btn = document.getElementById('submitBtn');
             const status = document.getElementById('status');
-            const fileInput = document.getElementById('audioFile');
-
-            btn.disabled = true;
-            status.style.color = "#facc15";
-            status.innerText = "⏳ מעבד שמע...";
-
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('model', document.getElementById('modelSelect').value);
-            formData.append('output_mode', document.getElementById('outputMode').value);
-            formData.append('add_chords', document.getElementById('addChords').checked);
-            
+            const btn = document.getElementById('submitBtn');
             const mode = document.querySelector('input[name="mode"]:checked').value;
-            formData.append('mode', mode);
-
-            if (mode === 'manual') {
-                formData.append('bpm_mode', document.getElementById('bpmMode').value);
-                formData.append('manual_bpm', document.getElementById('manualBpmInput').value);
-                formData.append('time_sig_select', document.getElementById('timeSigSelect').value);
-            } else if (mode === 'anchor' && document.getElementById('anchorFile').files.length) {
-                formData.append('reference_midi', document.getElementById('anchorFile').files[0]);
+            if (mode === 'anchor' && !document.getElementById('anchorFile').files.length) {
+                status.className = "error";
+                status.innerText = "❌ יש לבחור קובץ MIDI בסיס, או לעבור למצב ידני.";
+                return;
             }
 
-            const baseName = fileInput.files[0].name.split('.').slice(0, -1).join('.') || 'audio';
+            status.className = "loading";
+            status.innerText = "⏳ מעבד שמע ב-GPU... ייקח כ-3 שניות";
+            btn.disabled = true;
+            btn.style.opacity = "0.5";
+
+            const formData = new FormData();
+            formData.append('file', document.getElementById('audioFile').files[0]);
+            formData.append('model', document.getElementById('modelSelect').value);
+            formData.append('mode', mode);
+            formData.append('split_hands', document.getElementById('splitHands').checked);
+            if (mode === 'manual') {
+                formData.append('manual_key_tonic', document.getElementById('keyTonic').value);
+                formData.append('manual_key_mode', document.getElementById('keyMode').value);
+                formData.append('manual_bpm', document.getElementById('manualBpm').value);
+            } else if (mode === 'anchor') {
+                formData.append('anchor_midi', document.getElementById('anchorFile').files[0]);
+            }
 
             try {
                 const res = await fetch('/transcribe', { method: 'POST', body: formData });
                 if (res.ok) {
+                    const usedFallback = res.headers.get('X-Used-Fallback');
+                    const dtwUsed = res.headers.get('X-DTW-Used');
+                    const disp = res.headers.get('Content-Disposition') || '';
+                    const m = disp.match(/filename="?([^"]+)"?/);
+                    const outName = m ? m[1] : 'transcribed.mid';
                     const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
-                    a.href = window.URL.createObjectURL(blob);
-                    a.download = baseName + ".mid";
+                    a.href = url;
+                    a.download = outName;
                     a.click();
-                    status.style.color = "#4ade80";
-                    status.innerText = "✅ ירד בהצלחה: " + baseName + ".mid";
+                    status.className = usedFallback ? "loading" : "success";
+                    let msg = usedFallback
+                        ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch במקום."
+                        : "✅ ההמרה הושלמה!";
+                    if (dtwUsed === "1") msg += " (יושר מול ה-MIDI הבסיס עם DTW)";
+                    else if (dtwUsed === "0") msg += " (יישור DTW נכשל, נעשה שימוש ב-MIDI הבסיס הלא-מיושר)";
+                    status.innerText = msg + " " + outName + " ירד.";
                 } else {
                     const errData = await res.json();
-                    status.style.color = "#f87171";
-                    status.innerText = "❌ שגיאה: " + (errData.detail || "עיבוד נכשל");
+                    status.className = "error";
+                    status.innerText = "❌ שגיאה: " + (errData.detail || "עיבוד השמע נכשל");
                 }
             } catch (err) {
-                status.style.color = "#f87171";
-                status.innerText = "❌ שגיאה בהתקשרות לשרת";
+                status.className = "error";
+                status.innerText = "❌ שגיאה בהתקשרות לשרת.";
             } finally {
                 btn.disabled = false;
+                btn.style.opacity = "1";
             }
         };
     </script>
@@ -349,19 +521,19 @@ HTML_CONTENT = """<!DOCTYPE html>
 </html>"""
 
 @app.get("/", response_class=HTMLResponse)
-def index(): return HTML_CONTENT
+def index():
+    return HTML_CONTENT
 
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
     model: str = Form("piano"),
-    output_mode: str = Form("sheet"),
-    add_chords: bool = Form(True),
     mode: str = Form("detect"),
-    bpm_mode: str = Form("auto"),
+    manual_key_tonic: int = Form(0),
+    manual_key_mode: str = Form("major"),
     manual_bpm: float = Form(120.0),
-    time_sig_select: str = Form("auto"),
-    reference_midi: UploadFile = File(None)
+    split_hands: bool = Form(False),
+    anchor_midi: UploadFile = File(None),
 ):
     import uuid
     job_id = uuid.uuid4().hex[:8]
@@ -369,75 +541,116 @@ async def transcribe(
     raw_path = f"uploads/{job_id}_raw{src_ext}"
     stem_wav_path = f"uploads/{job_id}_stem.wav"
     output_midi = f"outputs/{job_id}.mid"
+    basic_pitch_out = f"outputs/{job_id}_stem_basic_pitch.mid"
     final_midi = f"outputs/{job_id}_final.mid"
     sep_dir = f"outputs/{job_id}_sep"
 
-    try:
-        with open(raw_path, "wb") as f: shutil.copyfileobj(file.file, f)
+    DEMUCS_STEMS = {"piano", "bass", "guitar", "vocals", "other"}
+    if model not in DEMUCS_STEMS:
+        raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
 
-        subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True)
+    # output filename follows the original upload's name, swapped to .mid
+    orig_stem = os.path.splitext(file.filename or "transcribed")[0] or "transcribed"
+    download_name = f"{orig_stem}.mid"
+
+    try:
+        with open(raw_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        # ---- Demucs: real stem separation on the ORIGINAL full-quality audio
+        # (not downsampled first -- that would hurt separation quality) ----
+        demucs_result = subprocess.run(
+            ["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path],
+            capture_output=True, text=True,
+        )
+        if demucs_result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {demucs_result.stderr[-1500:]}")
+
         raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
         stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
-
         if not os.path.exists(stem_source):
-            subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
-        else:
-            subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
+            raise HTTPException(status_code=500, detail=f"הסטם '{model}' לא נמצא אחרי ההפרדה")
 
+        # המרה ל-WAV תקני -- על הסטם המבודד, לא על כל התערובת
+        conv = subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True, text=True)
+        if conv.returncode != 0:
+            raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
+
+        used_fallback = False
         if model == "piano" and PIANO_MODEL is not None:
             from piano_transcription_inference import sample_rate
             import librosa
             audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
             PIANO_MODEL.transcribe(audio, output_midi)
         else:
+            if model == "piano":
+                used_fallback = True
+                print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
             from basic_pitch.inference import predict_and_save
             predict_and_save([stem_wav_path], "outputs", True, False, False, False)
-            output_midi = f"outputs/{job_id}_stem_basic_pitch.mid"
+            output_midi = basic_pitch_out
 
-        raw_notes = read_midi_notes_and_map(output_midi)["notes"]
-        
-        tempo_map_events = []
-        timesig_events = []
+        if not os.path.exists(output_midi):
+            raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
 
-        if mode == "anchor" and reference_midi is not None:
-            ref_bytes = await reference_midi.read()
-            ref_path = f"uploads/{job_id}_ref.mid"
-            with open(ref_path, "wb") as f: f.write(ref_bytes)
-            ref_map = read_midi_notes_and_map(ref_path)
-            
-            tempo_map_events = ref_map["tempo_map"]
-            timesig_events = ref_map["timesig_map"]
-            bpm = tempo_map_events[0][1] if tempo_map_events else 120.0
-        else:
-            if mode == "manual" and bpm_mode == "custom":
-                bpm = manual_bpm
-            else:
-                bpm = detect_bpm_from_audio(raw_path)
-            tempo_map_events = [(0, bpm)]
+        # ---- ghost-note cleanup: drop too-short / too-quiet notes, cap pedal-smeared length ----
+        raw_notes_vel = read_midi_notes_and_map(output_midi)["notes"]
+        raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
+        raw_notes = remove_octave_overtones(raw_notes)
+        if not raw_notes:
+            raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
 
-            if mode == "manual" and time_sig_select != "auto":
-                num, den = map(int, time_sig_select.split('/'))
-                timesig_events = [(0, num, den)]
-            else:
-                timesig_events = [(0, 4, 4)]
+        # ---- key + tempo: auto-detected, set manually, or read from an anchor/reference MIDI ----
+        dtw_used = False
+        if mode == "anchor":
+            if anchor_midi is None:
+                raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+            anchor_bytes = await anchor_midi.read()
+            anchor_path = f"uploads/{job_id}_anchor.mid"
+            with open(anchor_path, "wb") as f:
+                f.write(anchor_bytes)
+            anchor = read_midi_notes_and_map(anchor_path)
+            anchor_notes3 = [(p, s, e) for p, s, e, v in anchor["notes"]]
+            tonic, is_minor = detect_key(anchor_notes3)
+            tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor_notes3
+            # Chroma DTW: warp the reference's tempo/structure onto the performance's
+            # actual timing (handles tempo drift/rubato). Falls back to the plain
+            # (unwarped) anchor data -- never blocks the user if DTW itself fails.
+            try:
+                tempo_map, timesig_map, anchor_notes = align_reference_to_performance(
+                    anchor["notes"], anchor["tempo_map"], anchor["timesig_map"], stem_wav_path
+                )
+                dtw_used = True
+            except Exception:
+                import traceback
+                print("⚠️ יישור Chroma DTW נכשל -- ממשיך עם ה-MIDI הבסיס הלא-מיושר:")
+                traceback.print_exc()
+        elif mode == "manual":
+            tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
+            tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
+        else:  # "detect": key from the transcription itself, BPM from the audio
+            tonic, is_minor = detect_key(raw_notes)
+            detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
+            tempo_map, timesig_map, anchor_notes = [(0, detected_bpm)], [(0, 4, 4)], []
 
-        cleaned = filter_noise(raw_notes)
-        cleaned = merge_micro_gaps(cleaned)
+        snapped = snap_to_key(raw_notes, tonic, is_minor)
+        quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
+        final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands))
+        with open(final_midi, "wb") as f:
+            f.write(final_bytes)
 
-        is_quant = output_mode == "sheet"
-
-        if is_quant:
-            processed_notes = quantize_for_sheet_music(cleaned, bpm=bpm)
-        else:
-            processed_notes = cleaned
-
-        final_bytes = build_output_midi_bytes(processed_notes, tempo_map_events, timesig_events, is_quantized=is_quant, add_chords=bool(add_chords))
-
-        with open(final_midi, "wb") as f: f.write(final_bytes)
-        return FileResponse(final_midi, filename="transcribed.mid", media_type="audio/midi")
-
+        resp = FileResponse(final_midi, filename=download_name, media_type="audio/midi")
+        if used_fallback:
+            resp.headers["X-Used-Fallback"] = "basic_pitch_instead_of_piano_model"
+        if mode == "anchor":
+            resp.headers["X-DTW-Used"] = "1" if dtw_used else "0"
+        return resp
+    except HTTPException:
+        raise
     except Exception as err:
+        print(f"❌ שגיאה בזמן המרה: {err}")
         raise HTTPException(status_code=500, detail=str(err))
     finally:
         gc.collect()
-        if torch.cuda.is_available(): torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
