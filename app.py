@@ -8,6 +8,7 @@ import subprocess
 import torch
 import gc
 import mido
+import math
 
 app = FastAPI(title="Professional Audio to Sheet-Music MIDI Pipeline")
 
@@ -15,9 +16,6 @@ MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29,
 MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 PPQ_OUT = 480
 
-# ==========================================
-# 1. MIDI READING & PARSING
-# ==========================================
 def read_midi_notes_and_map(path):
     mid = mido.MidiFile(str(path))
     ppq = mid.ticks_per_beat
@@ -60,9 +58,6 @@ def read_midi_notes_and_map(path):
         "notes": [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
     }
 
-# ==========================================
-# 2. PROCESSING & ANALYSIS
-# ==========================================
 def filter_noise(notes, min_duration=0.035, min_velocity=12):
     return [(p, s, e, v) for p, s, e, v in notes if (e - s) >= min_duration and v >= min_velocity]
 
@@ -116,28 +111,16 @@ def detect_bpm_from_audio(wav_path):
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
     return float(np.atleast_1d(tempo)[0])
 
-def detect_key(notes):
-    hist = [0.0] * 12
-    for p, s, e, _ in notes:
-        hist[p % 12] += max(0.05, e - s)
-    best = (-1e18, 0, False)
-    for tonic in range(12):
-        for profile, is_minor in ((MAJ_PROFILE, False), (MIN_PROFILE, True)):
-            score = sum(hist[(i + tonic) % 12] * profile[i] for i in range(12))
-            if score > best[0]: best = (score, tonic, is_minor)
-    return best[1], best[2]
-
-# ==========================================
-# 3. BUILD OUTPUT MIDI
-# ==========================================
 def build_output_midi_bytes(notes, tempo_map_events, timesig_events, is_quantized=True, add_chords=False):
     out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
     meta_track = mido.MidiTrack()
     
     for t_sec, bpm in tempo_map_events:
         meta_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
+    
     for t_sec, num, den in timesig_events:
-        meta_track.append(mido.MetaMessage("time_signature", numerator=num, denominator=den, time=0))
+        midi_den = int(math.log2(den)) if den > 0 else 2
+        meta_track.append(mido.MetaMessage("time_signature", numerator=num, denominator=midi_den, time=0))
 
     if is_quantized and add_chords:
         chords = detect_chords(notes)
@@ -178,9 +161,6 @@ def build_output_midi_bytes(notes, tempo_map_events, timesig_events, is_quantize
     out_mid.save(file=buf)
     return buf.getvalue()
 
-# ==========================================
-# 4. FASTAPI SERVER & UI
-# ==========================================
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
@@ -275,53 +255,17 @@ HTML_CONTENT = """<!DOCTYPE html>
                 </div>
 
                 <div class="field-group">
-                    <label>סולם</label>
-                    <select id="keyModeSelect" onchange="document.getElementById('keyGroup').style.display = this.value === 'custom' ? 'flex' : 'none'">
-                        <option value="auto">זיהוי אוטומטי</option>
-                        <option value="custom">קביעה ידנית</option>
-                    </select>
-                    <div class="row2" id="keyGroup" style="display:none;margin-top:6px;">
-                        <select id="keyTonic">
-                            <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
-                            <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
-                            <option value="6">F#</option><option value="7">G</option><option value="8">G#</option>
-                            <option value="9">A</option><option value="10">A#</option><option value="11">B</option>
-                        </select>
-                        <select id="keyScale">
-                            <option value="major">מז'ור</option>
-                            <option value="minor">מינור</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="field-group">
                     <label>משקל</label>
                     <select id="timeSigSelect">
                         <option value="auto">זיהוי אוטומטי (4/4)</option>
                         <optgroup label="רבעים">
-                            <option value="1/4">1/4</option>
-                            <option value="2/4">2/4</option>
-                            <option value="3/4">3/4</option>
-                            <option value="4/4">4/4</option>
-                            <option value="5/4">5/4</option>
-                            <option value="6/4">6/4</option>
-                            <option value="7/4">7/4</option>
+                            <option value="1/4">1/4</option><option value="2/4">2/4</option><option value="3/4">3/4</option><option value="4/4">4/4</option><option value="5/4">5/4</option><option value="6/4">6/4</option><option value="7/4">7/4</option>
                         </optgroup>
                         <optgroup label="שמיניות">
-                            <option value="3/8">3/8</option>
-                            <option value="5/8">5/8</option>
-                            <option value="6/8">6/8</option>
-                            <option value="7/8">7/8</option>
-                            <option value="9/8">9/8</option>
-                            <option value="11/8">11/8</option>
-                            <option value="12/8">12/8</option>
-                            <option value="13/8">13/8</option>
-                            <option value="15/8">15/8</option>
+                            <option value="3/8">3/8</option><option value="5/8">5/8</option><option value="6/8">6/8</option><option value="7/8">7/8</option><option value="9/8">9/8</option><option value="11/8">11/8</option><option value="12/8">12/8</option><option value="13/8">13/8</option><option value="15/8">15/8</option>
                         </optgroup>
                         <optgroup label="חלקי 16">
-                            <option value="5/16">5/16</option>
-                            <option value="7/16">7/16</option>
-                            <option value="9/16">9/16</option>
+                            <option value="5/16">5/16</option><option value="7/16">7/16</option><option value="9/16">9/16</option>
                         </optgroup>
                     </select>
                 </div>
@@ -371,9 +315,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (mode === 'manual') {
                 formData.append('bpm_mode', document.getElementById('bpmMode').value);
                 formData.append('manual_bpm', document.getElementById('manualBpmInput').value);
-                formData.append('key_mode_select', document.getElementById('keyModeSelect').value);
-                formData.append('key_tonic', document.getElementById('keyTonic').value);
-                formData.append('key_scale', document.getElementById('keyScale').value);
                 formData.append('time_sig_select', document.getElementById('timeSigSelect').value);
             } else if (mode === 'anchor' && document.getElementById('anchorFile').files.length) {
                 formData.append('reference_midi', document.getElementById('anchorFile').files[0]);
@@ -419,9 +360,6 @@ async def transcribe(
     mode: str = Form("detect"),
     bpm_mode: str = Form("auto"),
     manual_bpm: float = Form(120.0),
-    key_mode_select: str = Form("auto"),
-    key_tonic: int = Form(0),
-    key_scale: str = Form("major"),
     time_sig_select: str = Form("auto"),
     reference_midi: UploadFile = File(None)
 ):
@@ -442,7 +380,6 @@ async def transcribe(
         stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
 
         if not os.path.exists(stem_source):
-            print(f"⚠️ Demucs לא מצא את הסטם {model}, משתמש בקובץ האודיו המקורי כגיבוי.")
             subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
         else:
             subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
@@ -500,7 +437,6 @@ async def transcribe(
         return FileResponse(final_midi, filename="transcribed.mid", media_type="audio/midi")
 
     except Exception as err:
-        print(f"❌ Error during processing: {str(err)}")
         raise HTTPException(status_code=500, detail=str(err))
     finally:
         gc.collect()
