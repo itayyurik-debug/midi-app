@@ -130,12 +130,14 @@ def detect_key(notes):
 # ==========================================
 # 3. BUILD OUTPUT MIDI
 # ==========================================
-def build_output_midi_bytes(notes, bpm, timesig=(4, 4), is_quantized=True, add_chords=False):
+def build_output_midi_bytes(notes, tempo_map_events, timesig_events, is_quantized=True, add_chords=False):
     out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
     meta_track = mido.MidiTrack()
     
-    meta_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
-    meta_track.append(mido.MetaMessage("time_signature", numerator=timesig[0], denominator=timesig[1], time=0))
+    for t_sec, bpm in tempo_map_events:
+        meta_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
+    for t_sec, num, den in timesig_events:
+        meta_track.append(mido.MetaMessage("time_signature", numerator=num, denominator=den, time=0))
 
     if is_quantized and add_chords:
         chords = detect_chords(notes)
@@ -149,7 +151,9 @@ def build_output_midi_bytes(notes, bpm, timesig=(4, 4), is_quantized=True, add_c
 
     tr = mido.MidiTrack()
     evs = []
-    sec_per_tick = 60.0 / (bpm * PPQ_OUT)
+    
+    bpm_start = tempo_map_events[0][1] if tempo_map_events else 120.0
+    sec_per_tick = 60.0 / (bpm_start * PPQ_OUT)
 
     for p, s, d_or_e, v in notes:
         if is_quantized:
@@ -218,6 +222,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         .field-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
         .row2 { display: flex; gap: 10px; }
         .row2 > div { flex: 1; }
+        optgroup { background: #1e293b; color: #94a3b8; font-weight: bold; }
+        option { color: #f8fafc; }
     </style>
 </head>
 <body>
@@ -240,7 +246,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             <select id="outputMode">
                 <option value="sheet">🎼 מיושר לתווים (יישור לקצב וסיומת נקייה)</option>
-                <option value="raw">⚡ MIDI גולמי (ללא יישור לקצב)</option>
+                <option value="raw">⚡ MIDI ללא יישור לקצב</option>
             </select>
 
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
@@ -292,10 +298,31 @@ HTML_CONTENT = """<!DOCTYPE html>
                     <label>משקל</label>
                     <select id="timeSigSelect">
                         <option value="auto">זיהוי אוטומטי (4/4)</option>
-                        <option value="4/4">4/4</option>
-                        <option value="3/4">3/4</option>
-                        <option value="6/8">6/8</option>
-                        <option value="2/4">2/4</option>
+                        <optgroup label="רבעים">
+                            <option value="1/4">1/4</option>
+                            <option value="2/4">2/4</option>
+                            <option value="3/4">3/4</option>
+                            <option value="4/4">4/4</option>
+                            <option value="5/4">5/4</option>
+                            <option value="6/4">6/4</option>
+                            <option value="7/4">7/4</option>
+                        </optgroup>
+                        <optgroup label="שמיניות">
+                            <option value="3/8">3/8</option>
+                            <option value="5/8">5/8</option>
+                            <option value="6/8">6/8</option>
+                            <option value="7/8">7/8</option>
+                            <option value="9/8">9/8</option>
+                            <option value="11/8">11/8</option>
+                            <option value="12/8">12/8</option>
+                            <option value="13/8">13/8</option>
+                            <option value="15/8">15/8</option>
+                        </optgroup>
+                        <optgroup label="חלקי 16">
+                            <option value="5/16">5/16</option>
+                            <option value="7/16">7/16</option>
+                            <option value="9/16">9/16</option>
+                        </optgroup>
                     </select>
                 </div>
             </div>
@@ -410,17 +437,16 @@ async def transcribe(
     try:
         with open(raw_path, "wb") as f: shutil.copyfileobj(file.file, f)
 
-        # 1. Demucs Stem Isolation
         subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True)
         raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
         stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
 
         if not os.path.exists(stem_source):
+            print(f"⚠️ Demucs לא מצא את הסטם {model}, משתמש בקובץ האודיו המקורי כגיבוי.")
             subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
         else:
             subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True)
 
-        # 2. Transcription
         if model == "piano" and PIANO_MODEL is not None:
             from piano_transcription_inference import sample_rate
             import librosa
@@ -431,29 +457,33 @@ async def transcribe(
             predict_and_save([stem_wav_path], "outputs", True, False, False, False)
             output_midi = f"outputs/{job_id}_stem_basic_pitch.mid"
 
-        # 3. Reading Notes
         raw_notes = read_midi_notes_and_map(output_midi)["notes"]
         
-        # Determine BPM
-        if mode == "manual" and bpm_mode == "custom":
-            bpm = manual_bpm
-        elif mode == "anchor" and reference_midi is not None:
+        tempo_map_events = []
+        timesig_events = []
+
+        if mode == "anchor" and reference_midi is not None:
             ref_bytes = await reference_midi.read()
             ref_path = f"uploads/{job_id}_ref.mid"
             with open(ref_path, "wb") as f: f.write(ref_bytes)
             ref_map = read_midi_notes_and_map(ref_path)
-            bpm = ref_map["tempo_map"][0][1] if ref_map["tempo_map"] else 120.0
+            
+            tempo_map_events = ref_map["tempo_map"]
+            timesig_events = ref_map["timesig_map"]
+            bpm = tempo_map_events[0][1] if tempo_map_events else 120.0
         else:
-            bpm = detect_bpm_from_audio(raw_path)
+            if mode == "manual" and bpm_mode == "custom":
+                bpm = manual_bpm
+            else:
+                bpm = detect_bpm_from_audio(raw_path)
+            tempo_map_events = [(0, bpm)]
 
-        # Determine Time Signature
-        if mode == "manual" and time_sig_select != "auto":
-            num, den = map(int, time_sig_select.split('/'))
-            timesig = (num, den)
-        else:
-            timesig = (4, 4)
+            if mode == "manual" and time_sig_select != "auto":
+                num, den = map(int, time_sig_select.split('/'))
+                timesig_events = [(0, num, den)]
+            else:
+                timesig_events = [(0, 4, 4)]
 
-        # 4. Processing Pipeline
         cleaned = filter_noise(raw_notes)
         cleaned = merge_micro_gaps(cleaned)
 
@@ -464,12 +494,13 @@ async def transcribe(
         else:
             processed_notes = cleaned
 
-        final_bytes = build_output_midi_bytes(processed_notes, bpm=bpm, timesig=timesig, is_quantized=is_quant, add_chords=bool(add_chords))
+        final_bytes = build_output_midi_bytes(processed_notes, tempo_map_events, timesig_events, is_quantized=is_quant, add_chords=bool(add_chords))
 
         with open(final_midi, "wb") as f: f.write(final_bytes)
         return FileResponse(final_midi, filename="transcribed.mid", media_type="audio/midi")
 
     except Exception as err:
+        print(f"❌ Error during processing: {str(err)}")
         raise HTTPException(status_code=500, detail=str(err))
     finally:
         gc.collect()
