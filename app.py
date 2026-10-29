@@ -152,6 +152,69 @@ def align_reference_to_performance(anchor_notes4, anchor_tempo_map, anchor_times
     return warped_tempo_map, warped_timesig_map, warped_notes
 
 
+def truncate_sustain_overlaps(notes, pitch_range=4):
+    """If a note's sustain runs past the start of another note within a few
+    semitones of it, shorten the earlier note to end where the next one begins --
+    mitigates pedal-smeared notes bleeding into later phrases."""
+    out = list(notes)
+    for i, (pitch, start, end) in enumerate(out):
+        for pitch2, start2, end2 in out:
+            if start2 > start and start2 < end and abs(pitch2 - pitch) <= pitch_range:
+                end = min(end, start2)
+        out[i] = (pitch, start, end)
+    return out
+
+
+def _timesig_for_segment(y_seg, sr):
+    """One heuristic guess for a short audio segment's time signature, via
+    beat-accent periodicity. Candidate numerators: 2,3,4,5,6,7,9. This is a
+    real heuristic, not a guarantee -- it works reasonably for a clear, steady
+    meter, and is NOT reliable for irregular/mixed meters (7/8, 13/8, etc.):
+    no simple algorithm (this one included) detects those with real confidence."""
+    import numpy as np
+    import librosa
+    onset_env = librosa.onset.onset_strength(y=y_seg, sr=sr)
+    _, beat_frames = librosa.beat.beat_track(y=y_seg, sr=sr, onset_envelope=onset_env)
+    if len(beat_frames) < 8:
+        return 4
+    beat_strength = onset_env[beat_frames]
+    best_n, best_score = 4, -1.0
+    overall_std = float(np.std(beat_strength)) + 1e-6
+    for n in (2, 3, 4, 5, 6, 7, 9):
+        if len(beat_strength) < n * 2:
+            continue
+        groups = [beat_strength[i:i + n] for i in range(0, len(beat_strength) - n, n)]
+        if len(groups) < 2:
+            continue
+        downbeat_avg = float(np.mean([g[0] for g in groups]))
+        rest_avg = float(np.mean([np.mean(g[1:]) if len(g) > 1 else 0.0 for g in groups]))
+        score = (downbeat_avg - rest_avg) / overall_std
+        if score > best_score:
+            best_score, best_n = score, n
+    return best_n
+
+
+def detect_time_signature_map(wav_path, window_sec=20.0):
+    """Time-signature map across the whole track: re-runs the segment heuristic
+    every window_sec seconds and records a new time_signature event whenever the
+    guess changes. Denominator is always reported as 4 (this heuristic doesn't
+    attempt to distinguish simple vs compound subdivision)."""
+    import librosa
+    y, sr = librosa.load(wav_path, sr=None)
+    total_dur = len(y) / sr
+    events, t, last_n = [], 0.0, None
+    while t < total_dur:
+        seg = y[int(t * sr):int(min(t + window_sec, total_dur) * sr)]
+        if len(seg) < sr * 4:
+            break
+        n = _timesig_for_segment(seg, sr)
+        if n != last_n:
+            events.append((t, n, 4))
+            last_n = n
+        t += window_sec
+    return events if events else [(0.0, 4, 4)]
+
+
 def detect_bpm_from_audio(wav_path):
     """Audio-only tempo estimate, for the 'auto-detect' mode when no anchor MIDI is given."""
     import numpy as np
@@ -597,6 +660,7 @@ async def transcribe(
         raw_notes_vel = read_midi_notes_and_map(output_midi)["notes"]
         raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
         raw_notes = remove_octave_overtones(raw_notes)
+        raw_notes = truncate_sustain_overlaps(raw_notes)
         if not raw_notes:
             raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
 
@@ -628,10 +692,11 @@ async def transcribe(
         elif mode == "manual":
             tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
             tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
-        else:  # "detect": key from the transcription itself, BPM from the audio
+        else:  # "detect": key from the transcription itself, tempo + time signature from the audio
             tonic, is_minor = detect_key(raw_notes)
             detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
-            tempo_map, timesig_map, anchor_notes = [(0, detected_bpm)], [(0, 4, 4)], []
+            timesig_map = detect_time_signature_map(raw_path)
+            tempo_map, anchor_notes = [(0, detected_bpm)], []
 
         snapped = snap_to_key(raw_notes, tonic, is_minor)
         quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
