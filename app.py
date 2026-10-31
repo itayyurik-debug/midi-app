@@ -12,6 +12,9 @@ import traceback
 import urllib.parse
 import uuid
 import mido
+import numpy as np
+import copy
+import notation as nt   # score engine: beats/meter/tempo -> MusicXML + MIDI + chords
 
 app = FastAPI(title="Audio to MIDI Pipeline")
 
@@ -19,6 +22,25 @@ app = FastAPI(title="Audio to MIDI Pipeline")
 MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MIN_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 PPQ_OUT = 480
+
+# model key -> Demucs stem, playable MIDI range, monophonic?
+INSTR = {
+    "piano":     dict(stem="piano",  lo=21, hi=108, mono=False),
+    "bass":      dict(stem="bass",   lo=28, hi=67,  mono=True),
+    "guitar":    dict(stem="guitar", lo=40, hi=88,  mono=False),
+    "vocals":    dict(stem="vocals", lo=48, hi=84,  mono=True),
+    "sax_sop":   dict(stem="other",  lo=56, hi=88,  mono=True),
+    "sax_alto":  dict(stem="other",  lo=49, hi=81,  mono=True),
+    "sax_tenor": dict(stem="other",  lo=44, hi=76,  mono=True),
+    "sax_bari":  dict(stem="other",  lo=36, hi=69,  mono=True),
+    "brass":     dict(stem="other",  lo=52, hi=94,  mono=True),
+    "violin":    dict(stem="other",  lo=55, hi=100, mono=True),
+    "cello":     dict(stem="other",  lo=36, hi=81,  mono=True),
+    "strings":   dict(stem="other",  lo=36, hi=100, mono=False),
+    "other":     dict(stem="other",  lo=21, hi=108, mono=False),
+    "drums":     dict(stem="drums",  lo=35, hi=82,  mono=False),
+}
+ALL_PARTS = ["vocals", "piano", "guitar", "bass", "other", "drums"]   # what "all instruments" transcribes
 
 
 def read_midi_notes_and_map(path):
@@ -65,7 +87,7 @@ def read_midi_notes_and_map(path):
                 break
         return sec
 
-    tempo_map = [(tick_to_sec(t), round(60e6 / us)) for t, us in tempo_events]
+    tempo_map = [(tick_to_sec(t), round(60e6 / us, 2)) for t, us in tempo_events]
     timesig_map = [(tick_to_sec(t), n, d) for t, n, d in timesig_events]
     note_list = [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
 
@@ -93,7 +115,7 @@ def filter_ghost_notes(notes_with_vel, min_duration=0.03, min_velocity=15, max_d
     out = []
     for pitch, start, end, vel in notes_with_vel:
         dur = end - start
-        if dur < min_duration or vel < min_velocity:
+        if dur < min_duration or vel < min_velocity or (vel < 30 and dur < 0.15):
             continue
         if dur > max_duration:
             end = start + max_duration
@@ -101,29 +123,101 @@ def filter_ghost_notes(notes_with_vel, min_duration=0.03, min_velocity=15, max_d
     return out
 
 
-def remove_octave_overtones(notes, time_tolerance=0.05):
-    """Drop a note that starts almost exactly when another note starts one or two
-    octaves below it and lasts no longer -- a common false-positive when a bass
-    note's harmonic resonance gets mis-detected as a separate note."""
-    out = []
-    for i, n in enumerate(notes):
-        pitch, start, end = n[0], n[1], n[2]
-        is_overtone = False
-        for j, m in enumerate(notes):
-            pitch2, start2, end2 = m[0], m[1], m[2]
-            if i == j or pitch2 == pitch:
+def remove_octave_overtones(notes, time_tolerance=0.06, vel_ratio=0.8):
+    """Drop a weaker note that starts together with a note 1/2 octaves (or a 12th) below it:
+    typical harmonic false-positives. Real octave doubling (similar velocity) is kept."""
+    import bisect
+    ns = sorted(notes, key=lambda n: n[1])
+    starts = [n[1] for n in ns]
+    drop = set()
+    for i, n in enumerate(ns):
+        v = n[3] if len(n) > 3 else 80
+        lo = bisect.bisect_left(starts, n[1] - time_tolerance)
+        hi = bisect.bisect_right(starts, n[1] + time_tolerance)
+        for j in range(lo, hi):
+            if j == i:
                 continue
-            if (pitch - pitch2) in (12, 24) and abs(start - start2) <= time_tolerance and (end - start) <= (end2 - start2) + time_tolerance:
-                is_overtone = True
+            m = ns[j]
+            mv = m[3] if len(m) > 3 else 80
+            if (n[0] - m[0]) in (12, 19, 24, 28) and m[2] > n[1] and (
+                    (n[2] - n[1]) <= (m[2] - m[1]) + time_tolerance or v < mv * vel_ratio) and v <= mv * 1.05:
+                drop.add(i)
                 break
-        if not is_overtone:
-            out.append(n)
+    return [n for i, n in enumerate(ns) if i not in drop]
+
+
+def make_monophonic(notes):
+    """Single-line instruments: simultaneous onsets keep the strongest, overlaps are trimmed."""
+    out = []
+    for n in sorted(notes, key=lambda n: (n[1], -(n[3] if len(n) > 3 else 80))):
+        if out and n[1] - out[-1][1] < 0.04:
+            continue
+        if out and out[-1][2] > n[1]:
+            p = out[-1]
+            out[-1] = (p[0], p[1], n[1]) + tuple(p[3:])
+        out.append(n)
+    return [n for n in out if n[2] - n[1] >= 0.05]
+
+
+def snap_to_key_dynamic(notes, key_notes=None, win=12.0):
+    """Key detection per ~12s window (3s overlap, with hysteresis so it only flips on real evidence),
+    then snaps weak/short out-of-key notes to the key of THEIR window. Long, loud notes are kept
+    (real accidentals). key_notes (e.g. the anchor MIDI) can drive detection if given."""
+    if not notes:
+        return notes
+    src_notes = key_notes or notes
+    total = max(n[2] for n in list(src_notes) + list(notes))
+    nw = int(total // win) + 1
+    keys, prev = [], None
+    for w in range(nw):
+        a, b = w * win - 3, (w + 1) * win + 3
+        hist = [0.0] * 12
+        for n in src_notes:
+            ov = min(n[2], b) - max(n[1], a)
+            if ov > 0:
+                hist[n[0] % 12] += ov
+        if sum(hist) <= 0:
+            keys.append(None)
+            continue
+        scores, best = {}, (-1e18, 0, False)
+        for tonic in range(12):
+            for prof, mi in ((MAJ_PROFILE, False), (MIN_PROFILE, True)):
+                sc = sum(hist[(i + tonic) % 12] * prof[i] for i in range(12))
+                scores[(tonic, mi)] = sc
+                if sc > best[0]:
+                    best = (sc, tonic, mi)
+        cur = (best[1], best[2])
+        if prev is not None and scores[prev] >= best[0] * 0.95:
+            cur = prev
+        prev = cur
+        keys.append(cur)
+    first = next((k for k in keys if k is not None), None)
+    if first is None:
+        return notes
+    last = first
+    for i in range(nw):
+        if keys[i] is None:
+            keys[i] = last
+        else:
+            last = keys[i]
+    out = []
+    for n in notes:
+        tonic, mi = keys[min(int(max(n[1], 0) // win), nw - 1)]
+        scale = {(x + tonic) % 12 for x in ([0, 2, 3, 5, 7, 8, 10, 11] if mi else [0, 2, 4, 5, 7, 9, 11])}
+        pitch, pc = n[0], n[0] % 12
+        vel = n[3] if len(n) > 3 else 80
+        if pc not in scale and ((n[2] - n[1]) < 0.4 or vel < 60):
+            for d in (1, -1):
+                if (pc + d) % 12 in scale:
+                    pitch += d
+                    break
+        out.append((pitch, n[1], n[2]) + tuple(n[3:]))
     return out
 
 
 # ---------- chroma DTW: only used when a reference MIDI is uploaded, to align its
 # tempo/structure to the ACTUAL timing of the performance (tempo drift, rubato, etc.) ----------
-def _audio_chroma(wav_path, hop_length=512, sr_target=22050):
+def _audio_chroma(wav_path, hop_length=1024, sr_target=22050):
     import librosa
     y, sr = librosa.load(wav_path, sr=sr_target)
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
@@ -144,35 +238,27 @@ def _midi_notes_to_chroma(notes4, duration_sec, hop_length, sr):
     return chroma / norms
 
 
-def align_reference_to_performance(anchor_notes4, anchor_tempo_map, anchor_timesig_map, perf_wav_path):
-    """Returns (warped_tempo_map, warped_timesig_map, warped_notes3) with every time
-    value remapped from the reference MIDI's own timeline onto the real timing of
-    perf_wav_path, via chroma + DTW. Raises on failure -- caller should catch and
-    fall back to the unwarped anchor data rather than block the user."""
+def build_perf_to_ref(anchor_notes4, perf_wav_path):
+    """Chroma DTW between the anchor MIDI and the performance. Returns to_ref(t): maps a
+    performance time (sec) onto the anchor's timeline, so transcribed notes can wear the
+    anchor's exact tempo map / time signatures. Raises on failure (caller falls back)."""
+    import numpy as np
     import librosa
-    chroma_perf, hop_length, sr = _audio_chroma(perf_wav_path)
-    ref_duration = max((e for _, _, e, *_ in anchor_notes4), default=1.0)
-    chroma_ref = _midi_notes_to_chroma(anchor_notes4, ref_duration, hop_length, sr)
+    chroma_perf, hop, sr = _audio_chroma(perf_wav_path)
+    ref_dur = max((e for _, _, e, *_ in anchor_notes4), default=1.0)
+    chroma_ref = _midi_notes_to_chroma(anchor_notes4, ref_dur, hop, sr)
     _, wp = librosa.sequence.dtw(X=chroma_ref, Y=chroma_perf, metric="cosine")
-    frame_time = hop_length / sr
-    path = sorted(((r * frame_time, p * frame_time) for r, p in wp), key=lambda x: x[0])
-
-    def warp(t_ref):
-        if t_ref <= path[0][0]:
-            return path[0][1]
-        if t_ref >= path[-1][0]:
-            return path[-1][1]
-        for i in range(1, len(path)):
-            r0, p0 = path[i - 1]
-            r1, p1 = path[i]
-            if r0 <= t_ref <= r1:
-                return p0 if r1 == r0 else p0 + (t_ref - r0) / (r1 - r0) * (p1 - p0)
-        return path[-1][1]
-
-    warped_tempo_map = [(warp(t), bpm) for t, bpm in anchor_tempo_map]
-    warped_timesig_map = [(warp(t), n, d) for t, n, d in anchor_timesig_map]
-    warped_notes = [(p, warp(s), warp(e)) for p, s, e, v in anchor_notes4]
-    return warped_tempo_map, warped_timesig_map, warped_notes
+    wp = np.asarray(wp)[::-1]
+    n_perf = chroma_perf.shape[1]
+    cnt = np.bincount(wp[:, 1], minlength=n_perf)
+    sm = np.bincount(wp[:, 1], weights=wp[:, 0], minlength=n_perf)
+    idx = np.where(cnt > 0)[0]
+    ft = hop / sr
+    xs = idx * ft
+    ys = np.maximum.accumulate(sm[idx] / cnt[idx]) * ft
+    fwd = lambda t: float(np.interp(t, xs, ys))
+    fwd.inv = lambda t: np.interp(t, ys, xs)
+    return fwd
 
 
 def truncate_sustain_overlaps(notes, pitch_range=4):
@@ -318,9 +404,10 @@ def smooth_velocities(notes, window=3, blend=0.6, lo=35, hi=110):
     return out
 
 
-def quantize_notes(bp_notes, tempo_map, anchor_notes):
+def quantize_notes(bp_notes, tempo_map, anchor_notes, fine_starts=None):
     segs = build_segments(tempo_map, PPQ_OUT)
     grid = PPQ_OUT // 4
+    fine = PPQ_OUT // 12      # 16ths AND triplets, used only for notes matched to the anchor
     phase = 0
     if anchor_notes:
         offsets = sorted(int(sec_to_tick(s, segs)) % grid for _, s, _ in anchor_notes)
@@ -328,12 +415,97 @@ def quantize_notes(bp_notes, tempo_map, anchor_notes):
     out = []
     for n in bp_notes:
         pitch, start, end = n[0], n[1], n[2]
+        is_fine = bool(fine_starts) and (pitch, start) in fine_starts
+        g = fine if is_fine else grid
+        ph = phase % g
         s_tick = sec_to_tick(start, segs)
         e_tick = sec_to_tick(end, segs)
-        q_s = round((s_tick - phase) / grid) * grid + phase
-        q_d = max(grid, round((e_tick - s_tick) / grid) * grid)
+        q_s = round((s_tick - ph) / g) * g + ph
+        q_d = max(60 if is_fine else grid, round((e_tick - s_tick) / g) * g)
         out.append((pitch, max(0, int(q_s)), int(q_d)) + tuple(n[3:]))
     return out, segs
+
+
+def dedupe_quantized(notes):
+    """Same pitch, same tick -> one note; overlapping same-pitch notes are trimmed (no smear/doubles)."""
+    by = {}
+    for n in notes:
+        by.setdefault(n[0], []).append(n)
+    out = []
+    for p, lst in by.items():
+        lst.sort(key=lambda n: n[1])
+        cur = lst[0]
+        for n in lst[1:]:
+            if n[1] == cur[1]:
+                cv = max(cur[3] if len(cur) > 3 else 80, n[3] if len(n) > 3 else 80)
+                cur = (p, cur[1], max(cur[2], n[2]), cv)
+                continue
+            if cur[1] + cur[2] > n[1]:
+                cur = (p, cur[1], n[1] - cur[1]) + tuple(cur[3:])
+            if cur[2] > 0:
+                out.append(cur)
+            cur = n
+        out.append(cur)
+    return sorted(out, key=lambda n: (n[1], n[0]))
+
+
+def _tick_to_sec(tick, segs):
+    for t, bpm, tk in reversed(segs):
+        if tick >= tk:
+            return t + (tick - tk) / ((bpm / 60.0) * PPQ_OUT)
+    return 0.0
+
+
+def measure_boundaries(segs, timesig_map, end_sec):
+    """Measure start times (sec) built from the anchor's tempo map + time-signature map."""
+    ts = sorted((sec_to_tick(t, segs), n, d) for t, n, d in timesig_map) or [(0, 4, 4)]
+    end_tick, tick, bounds = sec_to_tick(end_sec, segs), 0.0, []
+    while tick <= end_tick + 1:
+        bounds.append(_tick_to_sec(tick, segs))
+        cur = next((x for x in reversed(ts) if x[0] <= tick + 1), ts[0])
+        tick += cur[1] * PPQ_OUT * 4 / cur[2]
+    return bounds
+
+
+def refine_notes_to_anchor(notes, anchor_notes, bounds):
+    """Phrase/measure matching: per measure, shift transcribed notes by the median offset to the
+    anchor's notes (pitch-class match, +-0.25s, capped +-0.15s), then snap matched notes to the
+    anchor's onsets one-to-one (never duplicates). Returns (notes, fine_starts)."""
+    import bisect, statistics
+    a = sorted(anchor_notes, key=lambda x: x[1])
+    a_st = [x[1] for x in a]
+    ns = sorted(notes, key=lambda n: n[1])
+    n_st = [n[1] for n in ns]
+    shifted = list(ns)
+    for m in range(len(bounds) - 1):
+        i0, i1 = bisect.bisect_left(n_st, bounds[m]), bisect.bisect_left(n_st, bounds[m + 1])
+        if i1 - i0 < 3:
+            continue
+        offs = []
+        for k in range(i0, i1):
+            n = ns[k]
+            lo, hi = bisect.bisect_left(a_st, n[1] - 0.25), bisect.bisect_right(a_st, n[1] + 0.25)
+            c = [a[j][1] - n[1] for j in range(lo, hi) if a[j][0] % 12 == n[0] % 12]
+            if c:
+                offs.append(min(c, key=abs))
+        if len(offs) >= 3:
+            off = max(-0.15, min(0.15, statistics.median(offs)))
+            for k in range(i0, i1):
+                n = shifted[k]
+                shifted[k] = (n[0], n[1] + off, n[2] + off) + tuple(n[3:])
+    used, fine, out = set(), set(), []
+    for n in sorted(shifted, key=lambda n: n[1]):
+        lo, hi = bisect.bisect_left(a_st, n[1] - 0.08), bisect.bisect_right(a_st, n[1] + 0.08)
+        c = [j for j in range(lo, hi) if j not in used and a[j][0] == n[0]] or \
+            [j for j in range(lo, hi) if j not in used and a[j][0] % 12 == n[0] % 12]
+        if c:
+            j = min(c, key=lambda j: abs(a[j][1] - n[1]))
+            used.add(j)
+            d, s = n[2] - n[1], a[j][1]
+            n = (n[0], s, s + d) + tuple(n[3:])
+            fine.add((n[0], s))
+        out.append(n)
+    return out, fine
 
 
 def split_hands_dynamic(notes, window_ticks=PPQ_OUT * 8, lo=55, hi=65, default=60):
@@ -450,12 +622,43 @@ except Exception:
     print("⚠️ שגיאה בטעינת מודל הפסנתר -- המודל הכללי (Basic Pitch) ישמש כגיבוי אוטומטי:")
     traceback.print_exc()  # full traceback, not just str(e) -- needed to actually diagnose this
 
+BP_PREDICT, BP_MODEL = None, None
+try:
+    from basic_pitch import ICASSP_2022_MODEL_PATH
+    from basic_pitch.inference import predict as BP_PREDICT
+    try:
+        from basic_pitch.inference import Model as _BPModel
+        BP_MODEL = _BPModel(ICASSP_2022_MODEL_PATH)      # load once, reuse
+    except Exception:
+        BP_MODEL = ICASSP_2022_MODEL_PATH                # path is accepted as model_or_model_path
+except Exception:
+    traceback.print_exc()
+
+
+def basic_pitch_to_midi(wav_path, out_midi, model_key):
+    """FIX: uses predict() with the model passed explicitly (no predict_and_save), tuned per instrument."""
+    import librosa
+    if BP_PREDICT is None:
+        raise RuntimeError("Basic Pitch לא מותקן")
+    cfg = INSTR.get(model_key, INSTR["other"])
+    kw = dict(onset_threshold=0.6 if cfg["mono"] else 0.5,
+              frame_threshold=0.35 if cfg["mono"] else 0.3,
+              minimum_note_length=100,
+              minimum_frequency=float(librosa.midi_to_hz(cfg["lo"])),
+              maximum_frequency=float(librosa.midi_to_hz(cfg["hi"])))
+    try:
+        _, midi_data, _ = BP_PREDICT(wav_path, model_or_model_path=BP_MODEL, **kw)
+    except TypeError:
+        _, midi_data, _ = BP_PREDICT(wav_path, **kw)
+    midi_data.write(out_midi)
+
+
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ממיר שמע ל-MIDI</title>
+    <title>ממיר שמע לתווים ול-MIDI</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
         #bgCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
@@ -488,7 +691,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <body>
     <canvas id="bgCanvas"></canvas>
     <div class="card">
-        <h1>🎹 ממיר שמע ל-MIDI</h1>
+        <h1>🎹 ממיר שמע לתווים ול-MIDI</h1>
         <p>העלה קובץ MP3 או שמע מהאייפד והמר אותו לקובץ MIDI נקי</p>
         <form id="transcribeForm">
             <div class="upload-box" onclick="document.getElementById('audioFile').click()">
@@ -496,11 +699,33 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <input type="file" id="audioFile" name="file" accept="audio/*,.mp3,.wav,.m4a" required onchange="updateFileName(this)">
             </div>
             <select name="model" id="modelSelect">
-                <option value="piano">🎹 פסנתר (Demucs + Piano Transcription)</option>
-                <option value="bass">🎸 בס (Demucs + Basic Pitch)</option>
-                <option value="guitar">🎸 גיטרה (Demucs + Basic Pitch)</option>
-                <option value="vocals">🎤 שירה (Demucs + Basic Pitch)</option>
-                <option value="other">🎻 שאר הכלים (סטם "other" של Demucs + Basic Pitch)</option>
+                <optgroup label="הכל">
+                    <option value="all">🎼 כל הכלים (שירה, פסנתר, גיטרה, בס, כלים נוספים, תופים) + אקורדים</option>
+                </optgroup>
+                <optgroup label="פסנתר">
+                    <option value="piano">🎹 פסנתר (Demucs + Piano Transcription)</option>
+                </optgroup>
+                <optgroup label="סקסופון (סטם other)">
+                    <option value="sax_alto">🎷 סקסופון אלט</option>
+                    <option value="sax_tenor">🎷 סקסופון טנור</option>
+                    <option value="sax_bari">🎷 סקסופון בריטון</option>
+                    <option value="sax_sop">🎷 סקסופון סופרן</option>
+                </optgroup>
+                <optgroup label="נחושת ומיתרים (סטם other)">
+                    <option value="brass">🎺 חצוצרה וכלי נשיפה מתכתיים</option>
+                    <option value="violin">🎻 כינור</option>
+                    <option value="cello">🎻 צ'לו</option>
+                    <option value="strings">🎻 מיתרים (אנסמבל)</option>
+                </optgroup>
+                <optgroup label="בס / גיטרה / שירה">
+                    <option value="bass">🎸 בס (Demucs + Basic Pitch)</option>
+                    <option value="guitar">🎸 גיטרה (Demucs + Basic Pitch)</option>
+                    <option value="vocals">🎤 שירה (Demucs + Basic Pitch)</option>
+                </optgroup>
+                <optgroup label="אחר">
+                    <option value="drums">🥁 תופים (בסיסי: קיק / סנייר / האט)</option>
+                    <option value="other">🎼 שאר הכלים (סטם "other")</option>
+                </optgroup>
             </select>
             <p style="color:#64748b;font-size:0.78rem;margin-top:6px">כל בחירה מפעילה קודם הפרדת Demucs אמיתית, ורק אז מתמללת את הכלי המבודד -- לא את כל התערובת.</p>
 
@@ -550,7 +775,16 @@ HTML_CONTENT = """<!DOCTYPE html>
                 שמור פדל סאסטיין כאירועים נפרדים (CC64), בלי למתוח את התווים
             </label>
 
-            <button type="submit" id="submitBtn">המר ל-MIDI 🚀</button>
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
+                <input type="checkbox" id="addChords" checked style="width:auto">
+                הוסף סימני אקורדים מעל התווים (lead sheet)
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
+                <input type="checkbox" id="writtenPitch" style="width:auto">
+                תווים כתובים לכלי מתועתק (סקסופון / חצוצרה ב-Bb / Eb)
+            </label>
+
+            <button type="submit" id="submitBtn">המר לתווים + MIDI 🚀</button>
         </form>
         <div id="status"></div>
     </div>
@@ -611,7 +845,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('pane-anchor').classList.toggle('active', m === 'anchor');
         }
         document.getElementById('modelSelect').addEventListener('change', function(){
-            const isPiano = (this.value === 'piano');
+            const isPiano = (this.value === 'piano' || this.value === 'all');
             document.getElementById('splitRow').style.display = isPiano ? 'flex' : 'none';
             document.getElementById('pedalRow').style.display = isPiano ? 'flex' : 'none';
         });
@@ -638,6 +872,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             formData.append('mode', mode);
             formData.append('split_hands', document.getElementById('splitHands').checked);
             formData.append('keep_pedal', document.getElementById('keepPedal').checked);
+            formData.append('add_chords', document.getElementById('addChords').checked);
+            formData.append('written_pitch', document.getElementById('writtenPitch').checked);
             if (mode === 'manual') {
                 formData.append('manual_key_tonic', document.getElementById('keyTonic').value);
                 formData.append('manual_key_mode', document.getElementById('keyMode').value);
@@ -681,29 +917,25 @@ HTML_CONTENT = """<!DOCTYPE html>
                     if (info.status === 'done') break;
                 }
 
-                // 3) download -- name = the uploaded file's own name
-                const dl = await fetch('/download/' + jobId);
-                if (!dl.ok) throw new Error('ההורדה נכשלה (HTTP ' + dl.status + ')');
-                const upName = document.getElementById('audioFile').files[0].name || 'transcribed';
-                const dot = upName.lastIndexOf('.');
-                let outName = (dot > 0 ? upName.slice(0, dot) : upName) + '.mid';
-                try {
-                    const hdr = dl.headers.get('X-Download-Name');
-                    if (hdr) outName = decodeURIComponent(hdr);
-                } catch (e) {}
-                const blob = await dl.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = outName;
-                a.click();
+                // 3) download buttons (MIDI / MusicXML for MuseScore / PDF when available)
+                const labels = {midi: '⬇ MIDI', xml: '⬇ MusicXML (MuseScore)', pdf: '⬇ PDF'};
+                const base = (document.getElementById('audioFile').files[0].name || 'transcribed').replace(/\\.[^.]+$/, '');
+                const extOf = {midi: '.mid', xml: '.musicxml', pdf: '.pdf'};
                 status.className = info.used_fallback ? "loading" : "success";
-                let msg = info.used_fallback
-                    ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch במקום."
-                    : "✅ ההמרה הושלמה!";
-                if (info.dtw_used === true) msg += " (יושר מול ה-MIDI הבסיס עם DTW)";
-                else if (info.dtw_used === false) msg += " (יישור DTW נכשל, נעשה שימוש ב-MIDI הבסיס הלא-מיושר)";
-                status.innerText = msg + " " + outName + " ירד.";
+                let msg = info.used_fallback ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch.<br>" : "✅ ההמרה הושלמה!<br>";
+                msg += (info.n_bars || 0) + ' תיבות | משקל: ' + (info.meter || []).join(', ') + ' | טמפו: ' + (info.tempo || []).join(', ') + ' | אקורדים: ' + (info.n_chords || 0);
+                if (info.beat_engine) msg += ' | פעימות: ' + info.beat_engine;
+                if (info.dtw_used === true) msg += ' | יושר ל-MIDI הבסיס (DTW)';
+                else if (info.dtw_used === false) msg += ' | יישור DTW נכשל';
+                status.innerHTML = msg + '<br>';
+                for (const f of (info.formats || [])) {
+                    const a = document.createElement('a');
+                    a.textContent = labels[f] || f;
+                    a.href = '/download/' + jobId + '?fmt=' + f;
+                    a.download = base + extOf[f];
+                    a.style.cssText = 'display:inline-block;margin:8px 4px 0;padding:8px 14px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-size:0.9rem';
+                    status.appendChild(a);
+                }
             } catch (err) {
                 status.className = "error";
                 status.innerText = "❌ שגיאה: " + (err && err.message ? err.message : err);
@@ -728,112 +960,184 @@ def _set(job_id, **kw):
     JOBS[job_id].update(kw)
 
 
+def _find_musescore():
+    for c in ("mscore4", "musescore4", "mscore3", "musescore3", "mscore", "musescore"):
+        p = shutil.which(c)
+        if p:
+            return p
+    return None
+
+
+def _stem_notes(model, stem_wav, work_prefix, job_id):
+    """One isolated stem -> cleaned notes [(pitch,start,end,vel)], pedal intervals, used_fallback."""
+    cfg = INSTR[model]
+    if model == "drums":
+        return nt.transcribe_drums(stem_wav), [], False
+    used_fallback, pedal, out_mid = False, [], f"{work_prefix}.mid"
+    if model == "piano" and PIANO_MODEL is not None:
+        from piano_transcription_inference import sample_rate
+        import librosa
+        audio, _ = librosa.load(stem_wav, sr=sample_rate)
+        PIANO_MODEL.transcribe(audio, out_mid)
+    else:
+        used_fallback = (model == "piano")
+        if used_fallback:
+            print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
+        basic_pitch_to_midi(stem_wav, out_mid, model)
+    if not os.path.exists(out_mid):
+        raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
+    parsed = read_midi_notes_and_map(out_mid)
+    if model == "piano" and not used_fallback:
+        pedal = parsed["pedal"]
+    notes = filter_ghost_notes(parsed["notes"], min_duration=0.06, min_velocity=15, max_duration=4.0)
+    notes = [n for n in notes if cfg["lo"] <= n[0] <= cfg["hi"]]
+    notes = remove_octave_overtones(notes)
+    if cfg["mono"]:
+        notes = make_monophonic(notes)
+    notes = truncate_sustain_overlaps(notes)
+    return notes, pedal, used_fallback
+
+
 def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
-                 manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal):
-    """The whole pipeline, run in a background thread so no HTTP request stays open
-    for minutes (Cloudflare quick tunnels cut requests that run ~100 seconds)."""
-    stem_wav_path = f"uploads/{job_id}_stem.wav"
-    output_midi = f"outputs/{job_id}.mid"
-    basic_pitch_out = f"outputs/{job_id}_stem_basic_pitch.mid"
-    final_midi = f"outputs/{job_id}_final.mid"
+                 manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal,
+                 add_chords=True, written_pitch=False):
+    """Whole pipeline in a background thread (no long HTTP request -> no Cloudflare timeout).
+    Demucs -> per-stem transcription -> beats/meter/tempo -> beat-synchronous quantization
+    -> staves/voices/keys/chords -> MusicXML + MIDI (+ PDF when MuseScore is installed)."""
+    out_base = f"outputs/{job_id}_score"
     sep_dir = f"outputs/{job_id}_sep"
+    mix_wav = f"uploads/{job_id}_mix.wav"
     orig_stem = os.path.splitext(orig_filename or "transcribed")[0] or "transcribed"
-    download_name = f"{orig_stem}.mid"
     try:
         _set(job_id, status="queued", stage="ממתין לתורו...")
         with JOB_LOCK:
             _set(job_id, status="running", stage="מפריד כלים עם Demucs (השלב הארוך, בפעם הראשונה גם יורד מודל)...")
-            # ---- Demucs: real stem separation on the ORIGINAL full-quality audio ----
-            demucs_result = subprocess.run(
-                ["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path],
-                capture_output=True, text=True,
-            )
-            if demucs_result.returncode != 0:
-                raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {demucs_result.stderr[-1500:]}")
-
-            raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
-            stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
-            if not os.path.exists(stem_source):
-                raise HTTPException(status_code=500, detail=f"הסטם '{model}' לא נמצא אחרי ההפרדה")
-
-            _set(job_id, stage="ממיר את הכלי המבודד ומתמלל לתווים...")
-            conv = subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True, text=True)
+            r = subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {r.stderr[-1500:]}")
+            base = os.path.splitext(os.path.basename(raw_path))[0]
+            stem_dir = os.path.join(sep_dir, "htdemucs_6s", base)
+            conv = subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "44100", "-ac", "1", mix_wav], capture_output=True, text=True)
             if conv.returncode != 0:
-                raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
+                raise HTTPException(status_code=500, detail="המרת המיקס נכשלה")
 
-            used_fallback = False
-            if model == "piano" and PIANO_MODEL is not None:
-                from piano_transcription_inference import sample_rate
-                import librosa
-                audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
-                PIANO_MODEL.transcribe(audio, output_midi)
-            else:
-                if model == "piano":
-                    used_fallback = True
-                    print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
-                from basic_pitch.inference import predict_and_save
-                predict_and_save([stem_wav_path], "outputs", True, False, False, False)
-                output_midi = basic_pitch_out
-
-            if not os.path.exists(output_midi):
-                raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
-
-            _set(job_id, stage="מנקה תווים, מיישר לקצב ובונה את קובץ ה-MIDI...")
-            parsed_model_midi = read_midi_notes_and_map(output_midi)
-            raw_notes_vel = parsed_model_midi["notes"]
-            # pedal events exist only in the piano model's output; they stay separate from note lengths
-            pedal_intervals = parsed_model_midi["pedal"] if (model == "piano" and not used_fallback) else []
-            raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
-            raw_notes = remove_octave_overtones(raw_notes)
-            raw_notes = truncate_sustain_overlaps(raw_notes)
-            if not raw_notes:
+            kinds = ALL_PARTS if model == "all" else [model]
+            parts, used_fallback, pedal_events = [], False, None
+            for k_i, kind in enumerate(kinds):
+                src_stem = os.path.join(stem_dir, INSTR[kind]["stem"] + ".wav")
+                if not os.path.exists(src_stem):
+                    raise HTTPException(status_code=500, detail=f"הסטם '{INSTR[kind]['stem']}' לא נמצא אחרי ההפרדה")
+                _set(job_id, stage=f"מתמלל {kind} ({k_i + 1}/{len(kinds)})...")
+                stem_wav = f"uploads/{job_id}_{kind}_stem.wav"
+                subprocess.run(["ffmpeg", "-y", "-i", src_stem, "-ar", "32000", "-ac", "1", stem_wav], capture_output=True, text=True)
+                notes, pedal, fb = _stem_notes(kind, stem_wav, f"outputs/{job_id}_{kind}", job_id)
+                used_fallback = used_fallback or fb
+                if notes:
+                    parts.append(dict(kind=kind, notes=notes, pedal=pedal, stem_wav=stem_wav))
+            if not parts:
                 raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
 
-            # ---- key + tempo: auto-detected, set manually, or read from an anchor/reference MIDI ----
-            dtw_used = None
+            _set(job_id, stage="מזהה פעימות, משקל וטמפו...")
+            dtw_used, key_notes, to_ref, beat_engine = None, None, None, None
+            all_t = [n[1] for p in parts for n in p["notes"]]
+            all_e = [n[2] for p in parts for n in p["notes"]]
             if mode == "anchor":
                 if not anchor_path:
                     raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
                 anchor = read_midi_notes_and_map(anchor_path)
-                anchor_notes3 = [(p, s, e) for p, s, e, v in anchor["notes"]]
-                tonic, is_minor = detect_key(anchor_notes3)
-                tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor_notes3
-                # Chroma DTW: falls back to the plain (unwarped) anchor data -- never blocks the user.
-                try:
-                    tempo_map, timesig_map, anchor_notes = align_reference_to_performance(
-                        anchor["notes"], anchor["tempo_map"], anchor["timesig_map"], stem_wav_path
-                    )
+                tempo_map, timesig_map = anchor["tempo_map"], anchor["timesig_map"]
+                anchor_notes = [(p, s, e) for p, s, e, v in anchor["notes"]]
+                key_notes = anchor_notes
+                ref_part = next((p for p in parts if p["kind"] != "drums"), parts[0])
+                try:   # chroma DTW: performance time -> anchor timeline
+                    to_ref = build_perf_to_ref(anchor["notes"], ref_part["stem_wav"])
                     dtw_used = True
                 except Exception:
                     dtw_used = False
-                    print("⚠️ יישור Chroma DTW נכשל -- ממשיך עם ה-MIDI הבסיס הלא-מיושר:")
+                    to_ref = lambda t: t
+                    to_ref.inv = lambda t: t
                     traceback.print_exc()
-            elif mode == "manual":
+                for p in parts:
+                    p["notes"] = [(n[0], to_ref(n[1]), max(to_ref(n[2]), to_ref(n[1]) + 0.03)) + tuple(n[3:]) for n in p["notes"]]
+                    p["pedal"] = [(to_ref(a), to_ref(b)) for a, b in p["pedal"]]
+                t_end = max(max(n[2] for p in parts for n in p["notes"]), max(a[2] for a in anchor_notes)) + 2.0
+                tl = nt.timeline_from_anchor(tempo_map, timesig_map, t_end)
+            else:
+                tl = None
+                if mode == "detect":
+                    try:
+                        beats, downs, beat_engine = nt.track_beats(mix_wav, "cuda" if torch.cuda.is_available() else "cpu")
+                        tl = nt.timeline_from_beats(beats, downs, min(all_t), max(all_e), all_t)
+                    except Exception:
+                        traceback.print_exc()
+                        print("⚠️ זיהוי פעימות נכשל -- עובר לטמפו קבוע")
+                if tl is None:
+                    bpm = float(manual_bpm) if mode == "manual" else detect_bpm_from_audio(mix_wav)
+                    step = 60.0 / bpm
+                    beats = np.arange(0.0, max(all_e) + 4 * step, step)
+                    tl = nt.timeline_from_beats(beats, beats[::4], min(all_t), max(all_e), all_t)
+
+            _set(job_id, stage="מצמיד לסולמות, מיישר ומקוונטז...")
+            key_override = None
+            if mode == "manual":
                 tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
-                tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
-            else:  # "detect": key from the transcription itself, tempo + time signature from the audio
-                tonic, is_minor = detect_key(raw_notes)
-                detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
-                timesig_map = detect_time_signature_map(raw_path)
-                tempo_map, anchor_notes = [(0, detected_bpm)], []
+                key_override = (nt._fifths(tonic if not is_minor else (tonic + 3) % 12), is_minor, tonic)
+            for p in parts:
+                if p["kind"] == "drums":
+                    continue
+                if mode == "manual":
+                    p["notes"] = snap_to_key(p["notes"], tonic, is_minor)
+                else:
+                    p["notes"] = snap_to_key_dynamic(p["notes"], key_notes)
+                p["notes"] = smooth_velocities(p["notes"])
+                if mode == "anchor":
+                    bounds = measure_boundaries(build_segments(tempo_map, PPQ_OUT), timesig_map, max(n[2] for n in p["notes"]) + 4.0)
+                    p["notes"], _ = refine_notes_to_anchor(p["notes"], anchor_notes, bounds)
+                if p["kind"] == "piano" and keep_pedal and p["pedal"]:
+                    p["pedal"] = [e for a, b in p["pedal"] for e in ((a, 127), (b, 0))]
+                else:
+                    p["pedal"] = None
 
-            snapped = snap_to_key(raw_notes, tonic, is_minor)
-            snapped = smooth_velocities(snapped)
-            quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
-            pedal_ticks = []
-            if keep_pedal and pedal_intervals:
-                pedal_ticks = [(int(sec_to_tick(a, segs)), int(sec_to_tick(b, segs))) for a, b in pedal_intervals]
-            final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands), pedal_ticks=pedal_ticks)
-            with open(final_midi, "wb") as f:
-                f.write(final_bytes)
+            chords = []
+            if add_chords:
+                _set(job_id, stage="מזהה אקורדים...")
+                try:
+                    tl_audio = tl
+                    if to_ref is not None:                     # anchor mode: score time -> performance time
+                        tl_audio = copy.copy(tl)
+                        tl_audio.pt = np.asarray(to_ref.inv(tl.pt), float)
+                    bass_wav = os.path.join(stem_dir, "bass.wav")
+                    chords = nt.detect_chords(mix_wav, bass_wav, tl_audio)
+                except Exception:
+                    traceback.print_exc()
+                    print("⚠️ זיהוי אקורדים נכשל -- ממשיך בלי אקורדים")
 
-            _set(job_id, status="done", stage="הושלם", path=final_midi, download_name=download_name,
-                 used_fallback=used_fallback, dtw_used=dtw_used)
+            _set(job_id, stage="בונה תווים (MusicXML) ו-MIDI...")
+            if model != "all" and model == "piano" and not split_hands:
+                pass   # piano keeps its grand staff (two staves) in the score; the MIDI hand split is always dynamic
+            res = nt.engrave([dict(kind=p["kind"], notes=p["notes"], pedal=p["pedal"]) for p in parts], tl, chords,
+                             out_base, title=orig_stem, written_pitch=bool(written_pitch), key_override=key_override)
+            files = {"midi": res["midi"], "xml": res["xml"]}
+            ms = _find_musescore()
+            if ms:
+                try:
+                    pdf = out_base + ".pdf"
+                    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+                    subprocess.run([ms, "-o", pdf, res["xml"]], capture_output=True, text=True, timeout=240, env=env)
+                    if os.path.exists(pdf):
+                        files["pdf"] = pdf
+                except Exception:
+                    traceback.print_exc()
+            _set(job_id, status="done", stage="הושלם", files=files, download_name=orig_stem,
+                 used_fallback=used_fallback, dtw_used=dtw_used, beat_engine=beat_engine,
+                 n_bars=len(tl.bars), n_chords=len(chords),
+                 meter=sorted({f"{b['num']}/{b['den']}" for b in tl.bars}),
+                 tempo=[round(b) for _, b in tl.tempos][:6])
     except HTTPException as e:
         print(f"❌ משימה {job_id} נכשלה: {e.detail}")
         _set(job_id, status="error", error=str(e.detail))
     except Exception as err:
-        traceback.print_exc()  # the full traceback lands in the Colab cell output
+        traceback.print_exc()
         _set(job_id, status="error", error=f"{type(err).__name__}: {err}")
     finally:
         gc.collect()
@@ -851,10 +1155,12 @@ async def transcribe(
     manual_bpm: float = Form(120.0),
     split_hands: bool = Form(False),
     keep_pedal: bool = Form(False),
+    add_chords: bool = Form(True),
+    written_pitch: bool = Form(False),
     anchor_midi: UploadFile = File(None),
 ):
     """Saves the uploads, starts the pipeline in the background and answers immediately."""
-    if model not in {"piano", "bass", "guitar", "vocals", "other"}:
+    if model not in INSTR and model != "all":
         raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
     job_id = uuid.uuid4().hex[:8]
     src_ext = os.path.splitext(file.filename or "")[1] or ".mp3"
@@ -872,7 +1178,7 @@ async def transcribe(
     threading.Thread(
         target=_process_job,
         args=(job_id, raw_path, anchor_path, file.filename, model, mode,
-              manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal),
+              manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal, add_chords, written_pitch),
         daemon=True,
     ).start()
     return {"job_id": job_id}
@@ -883,14 +1189,22 @@ def job_status(job_id: str):
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="המשימה לא נמצאה (ייתכן שהשרת הופעל מחדש)")
-    return {k: job.get(k) for k in ("status", "stage", "error", "download_name", "used_fallback", "dtw_used")}
+    out = {k: job.get(k) for k in ("status", "stage", "error", "download_name", "used_fallback", "dtw_used", "beat_engine", "n_bars", "n_chords", "meter", "tempo")}
+    out["formats"] = list((job.get("files") or {}).keys())
+    return out
 
 
 @app.get("/download/{job_id}")
-def job_download(job_id: str):
+def job_download(job_id: str, fmt: str = "midi"):
     job = JOBS.get(job_id)
     if job is None or job.get("status") != "done":
         raise HTTPException(status_code=404, detail="הקובץ עדיין לא מוכן או שהמשימה לא נמצאה")
-    resp = FileResponse(job["path"], filename=job["download_name"], media_type="audio/midi")
-    resp.headers["X-Download-Name"] = urllib.parse.quote(job["download_name"])  # ASCII-safe copy of the real name
+    path = (job.get("files") or {}).get(fmt)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"הפורמט {fmt} לא זמין")
+    ext = {"midi": ".mid", "xml": ".musicxml", "pdf": ".pdf"}[fmt]
+    mt = {"midi": "audio/midi", "xml": "application/vnd.recordare.musicxml+xml", "pdf": "application/pdf"}[fmt]
+    name = job["download_name"] + ext
+    resp = FileResponse(path, filename=name, media_type=mt)
+    resp.headers["X-Download-Name"] = urllib.parse.quote(name)
     return resp
