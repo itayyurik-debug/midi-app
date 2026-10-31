@@ -208,17 +208,23 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets, force_n=0):
     dens, i0 = [], 0
     for n in bar_n:
         dens.append(_density(pt, i0, i0 + n, onsets)); i0 += n
-    bars, pulse_div, i0 = [], [], 0
+    raw_pbpm, i0 = [], 0
+    for n in bar_n:
+        raw_pbpm.append(60.0 / float(np.median(np.diff(pt[i0:i0 + n + 1])))); i0 += n
+    bars, pulse_div, i0, last_kind = [], [], 0, None
     for bi, n in enumerate(bar_n):
         lo, hi = max(0, bi - 2), min(len(bar_n), bi + 3)
         tern = sum(d[0] for d in dens[lo:hi]); binc = sum(d[1] for d in dens[lo:hi])
-        pbpm = 60.0 / float(np.median(np.diff(pt[i0:i0 + n + 1])))
-        if n >= 5 and pbpm >= 100:                       # fast pulses -> the bar is counted in eighths (5/8, 7/8, 11/8, 13/8, ...)
+        pbpm = float(np.median(raw_pbpm[lo:hi]))          # smoothed over neighbouring bars, not just this one
+        eighth_ok = n >= 5 and pbpm >= (90 if last_kind == "eighth" else 100)    # hysteresis: a meter that
+        compound_ok = n in (2, 3) and tern > 1.6 * binc and tern + binc >= 6     # was just "eighth" needs a
+        if eighth_ok:                                                           # bigger push to drop out of it
             kind, pd, num, den = "eighth", 12, n, 8
-        elif n in (2, 3) and tern > 1.6 * binc and tern + binc >= 6:
+        elif compound_ok:
             kind, pd, num, den = "compound", 36, 3 * n, 8
         else:
             kind, pd, num, den = "simple", 24, n, 4
+        last_kind = kind
         bars.append(dict(i0=i0, i1=i0 + n, n=n, kind=kind, pd=pd, num=num, den=den, pickup=False))
         pulse_div += [pd] * n
         i0 += n
