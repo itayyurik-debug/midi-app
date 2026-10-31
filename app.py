@@ -477,22 +477,25 @@ def refine_notes_to_anchor(notes, anchor_notes, bounds):
     ns = sorted(notes, key=lambda n: n[1])
     n_st = [n[1] for n in ns]
     shifted = list(ns)
+    last_off = 0.0
     for m in range(len(bounds) - 1):
         i0, i1 = bisect.bisect_left(n_st, bounds[m]), bisect.bisect_left(n_st, bounds[m + 1])
-        if i1 - i0 < 3:
-            continue
-        offs = []
-        for k in range(i0, i1):
-            n = ns[k]
-            lo, hi = bisect.bisect_left(a_st, n[1] - 0.25), bisect.bisect_right(a_st, n[1] + 0.25)
-            c = [a[j][1] - n[1] for j in range(lo, hi) if a[j][0] % 12 == n[0] % 12]
-            if c:
-                offs.append(min(c, key=abs))
-        if len(offs) >= 3:
-            off = max(-0.15, min(0.15, statistics.median(offs)))
+        off = last_off   # sparse measure fallback: keep the previous measure's correction
+                          # instead of snapping back to zero (no visible jump in alignment)
+        if i1 - i0 >= 3:
+            offs = []
             for k in range(i0, i1):
-                n = shifted[k]
-                shifted[k] = (n[0], n[1] + off, n[2] + off) + tuple(n[3:])
+                n = ns[k]
+                lo, hi = bisect.bisect_left(a_st, n[1] - 0.25), bisect.bisect_right(a_st, n[1] + 0.25)
+                c = [a[j][1] - n[1] for j in range(lo, hi) if a[j][0] % 12 == n[0] % 12]
+                if c:
+                    offs.append(min(c, key=abs))
+            if len(offs) >= 3:
+                off = max(-0.25, min(0.25, statistics.median(offs)))
+        last_off = off
+        for k in range(i0, i1):
+            n = shifted[k]
+            shifted[k] = (n[0], n[1] + off, n[2] + off) + tuple(n[3:])
     used, fine, out = set(), set(), []
     for n in sorted(shifted, key=lambda n: n[1]):
         lo, hi = bisect.bisect_left(a_st, n[1] - 0.08), bisect.bisect_right(a_st, n[1] + 0.08)

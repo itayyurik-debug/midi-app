@@ -278,7 +278,7 @@ def timeline_from_anchor(tempo_map, timesig_map, t_end):
             pts.append(t2s(tick)); pdiv.append(pd)
         bars.append(dict(i0=i0, i1=i0 + cnt, n=cnt, kind="anchor", pd=pd, num=n, den=d, pickup=False))
         b_bpm = round(next((bp for t, bp, tk in reversed(segs) if tk <= start_tick + 1), segs[0][1]), 2)
-        if not tempos or abs(b_bpm - tempos[-1][1]) > 0.01:
+        if not tempos or abs(b_bpm - tempos[-1][1]) > max(1.5, 0.01 * tempos[-1][1]):
             tempos.append((int(sum(pdiv[:i0])), b_bpm))
     return Timeline(pts, pdiv, bars, tempos)
 
