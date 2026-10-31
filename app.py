@@ -7,7 +7,10 @@ import shutil
 import subprocess
 import torch
 import gc
+import threading
+import traceback
 import urllib.parse
+import uuid
 import mido
 
 app = FastAPI(title="Audio to MIDI Pipeline")
@@ -643,40 +646,67 @@ HTML_CONTENT = """<!DOCTYPE html>
                 formData.append('anchor_midi', document.getElementById('anchorFile').files[0]);
             }
 
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
             try {
+                // 1) start the job -- the server answers right away, the heavy work runs in the background
                 const res = await fetch('/transcribe', { method: 'POST', body: formData });
-                if (res.ok) {
-                    const usedFallback = res.headers.get('X-Used-Fallback');
-                    const dtwUsed = res.headers.get('X-DTW-Used');
-                    // download name = the uploaded file's own name (works even if a header gets mangled)
-                    const upName = document.getElementById('audioFile').files[0].name || 'transcribed';
-                    const dot = upName.lastIndexOf('.');
-                    let outName = (dot > 0 ? upName.slice(0, dot) : upName) + '.mid';
-                    try {
-                        const hdr = res.headers.get('X-Download-Name');
-                        if (hdr) outName = decodeURIComponent(hdr);
-                    } catch (e) {}
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = outName;
-                    a.click();
-                    status.className = usedFallback ? "loading" : "success";
-                    let msg = usedFallback
-                        ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch במקום."
-                        : "✅ ההמרה הושלמה!";
-                    if (dtwUsed === "1") msg += " (יושר מול ה-MIDI הבסיס עם DTW)";
-                    else if (dtwUsed === "0") msg += " (יישור DTW נכשל, נעשה שימוש ב-MIDI הבסיס הלא-מיושר)";
-                    status.innerText = msg + " " + outName + " ירד.";
-                } else {
-                    const errData = await res.json();
-                    status.className = "error";
-                    status.innerText = "❌ שגיאה: " + (errData.detail || "עיבוד השמע נכשל");
+                const raw = await res.text();
+                let data = null;
+                try { data = JSON.parse(raw); } catch (e) {}
+                if (!res.ok || !data || !data.job_id) {
+                    const why = (data && data.detail) ? data.detail : ('HTTP ' + res.status + ' ' + raw.slice(0, 160));
+                    throw new Error(why);
                 }
+                const jobId = data.job_id;
+
+                // 2) poll until done (no long-lived request, so the tunnel cannot time it out)
+                let fails = 0, info = null;
+                while (true) {
+                    await sleep(2500);
+                    let r;
+                    try {
+                        r = await fetch('/status/' + jobId);
+                        fails = 0;
+                    } catch (e) {
+                        fails++;
+                        if (fails >= 8) throw new Error('החיבור לשרת נפל (השרת או המנהרה כבו). הרץ שוב את תא ההפעלה ב-Colab.');
+                        continue;
+                    }
+                    if (r.status === 404) throw new Error('המשימה נעלמה -- השרת הופעל מחדש באמצע. נסה שוב.');
+                    if (!r.ok) throw new Error('בדיקת הסטטוס נכשלה (HTTP ' + r.status + ')');
+                    info = await r.json();
+                    if (info.status === 'error') throw new Error(info.error || 'העיבוד נכשל');
+                    status.className = "loading";
+                    status.innerText = '⏳ ' + (info.stage || 'מעבד...');
+                    if (info.status === 'done') break;
+                }
+
+                // 3) download -- name = the uploaded file's own name
+                const dl = await fetch('/download/' + jobId);
+                if (!dl.ok) throw new Error('ההורדה נכשלה (HTTP ' + dl.status + ')');
+                const upName = document.getElementById('audioFile').files[0].name || 'transcribed';
+                const dot = upName.lastIndexOf('.');
+                let outName = (dot > 0 ? upName.slice(0, dot) : upName) + '.mid';
+                try {
+                    const hdr = dl.headers.get('X-Download-Name');
+                    if (hdr) outName = decodeURIComponent(hdr);
+                } catch (e) {}
+                const blob = await dl.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = outName;
+                a.click();
+                status.className = info.used_fallback ? "loading" : "success";
+                let msg = info.used_fallback
+                    ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch במקום."
+                    : "✅ ההמרה הושלמה!";
+                if (info.dtw_used === true) msg += " (יושר מול ה-MIDI הבסיס עם DTW)";
+                else if (info.dtw_used === false) msg += " (יישור DTW נכשל, נעשה שימוש ב-MIDI הבסיס הלא-מיושר)";
+                status.innerText = msg + " " + outName + " ירד.";
             } catch (err) {
                 status.className = "error";
-                status.innerText = "❌ שגיאה בהתקשרות לשרת.";
+                status.innerText = "❌ שגיאה: " + (err && err.message ? err.message : err);
             } finally {
                 btn.disabled = false;
                 btn.style.opacity = "1";
@@ -690,6 +720,127 @@ HTML_CONTENT = """<!DOCTYPE html>
 def index():
     return HTML_CONTENT
 
+JOBS = {}                      # job_id -> {status, stage, error, path, download_name, ...}
+JOB_LOCK = threading.Lock()    # one conversion at a time on the GPU
+
+
+def _set(job_id, **kw):
+    JOBS[job_id].update(kw)
+
+
+def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
+                 manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal):
+    """The whole pipeline, run in a background thread so no HTTP request stays open
+    for minutes (Cloudflare quick tunnels cut requests that run ~100 seconds)."""
+    stem_wav_path = f"uploads/{job_id}_stem.wav"
+    output_midi = f"outputs/{job_id}.mid"
+    basic_pitch_out = f"outputs/{job_id}_stem_basic_pitch.mid"
+    final_midi = f"outputs/{job_id}_final.mid"
+    sep_dir = f"outputs/{job_id}_sep"
+    orig_stem = os.path.splitext(orig_filename or "transcribed")[0] or "transcribed"
+    download_name = f"{orig_stem}.mid"
+    try:
+        _set(job_id, status="queued", stage="ממתין לתורו...")
+        with JOB_LOCK:
+            _set(job_id, status="running", stage="מפריד כלים עם Demucs (השלב הארוך, בפעם הראשונה גם יורד מודל)...")
+            # ---- Demucs: real stem separation on the ORIGINAL full-quality audio ----
+            demucs_result = subprocess.run(
+                ["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path],
+                capture_output=True, text=True,
+            )
+            if demucs_result.returncode != 0:
+                raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {demucs_result.stderr[-1500:]}")
+
+            raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
+            stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
+            if not os.path.exists(stem_source):
+                raise HTTPException(status_code=500, detail=f"הסטם '{model}' לא נמצא אחרי ההפרדה")
+
+            _set(job_id, stage="ממיר את הכלי המבודד ומתמלל לתווים...")
+            conv = subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True, text=True)
+            if conv.returncode != 0:
+                raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
+
+            used_fallback = False
+            if model == "piano" and PIANO_MODEL is not None:
+                from piano_transcription_inference import sample_rate
+                import librosa
+                audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
+                PIANO_MODEL.transcribe(audio, output_midi)
+            else:
+                if model == "piano":
+                    used_fallback = True
+                    print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
+                from basic_pitch.inference import predict_and_save
+                predict_and_save([stem_wav_path], "outputs", True, False, False, False)
+                output_midi = basic_pitch_out
+
+            if not os.path.exists(output_midi):
+                raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
+
+            _set(job_id, stage="מנקה תווים, מיישר לקצב ובונה את קובץ ה-MIDI...")
+            parsed_model_midi = read_midi_notes_and_map(output_midi)
+            raw_notes_vel = parsed_model_midi["notes"]
+            # pedal events exist only in the piano model's output; they stay separate from note lengths
+            pedal_intervals = parsed_model_midi["pedal"] if (model == "piano" and not used_fallback) else []
+            raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
+            raw_notes = remove_octave_overtones(raw_notes)
+            raw_notes = truncate_sustain_overlaps(raw_notes)
+            if not raw_notes:
+                raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
+
+            # ---- key + tempo: auto-detected, set manually, or read from an anchor/reference MIDI ----
+            dtw_used = None
+            if mode == "anchor":
+                if not anchor_path:
+                    raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+                anchor = read_midi_notes_and_map(anchor_path)
+                anchor_notes3 = [(p, s, e) for p, s, e, v in anchor["notes"]]
+                tonic, is_minor = detect_key(anchor_notes3)
+                tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor_notes3
+                # Chroma DTW: falls back to the plain (unwarped) anchor data -- never blocks the user.
+                try:
+                    tempo_map, timesig_map, anchor_notes = align_reference_to_performance(
+                        anchor["notes"], anchor["tempo_map"], anchor["timesig_map"], stem_wav_path
+                    )
+                    dtw_used = True
+                except Exception:
+                    dtw_used = False
+                    print("⚠️ יישור Chroma DTW נכשל -- ממשיך עם ה-MIDI הבסיס הלא-מיושר:")
+                    traceback.print_exc()
+            elif mode == "manual":
+                tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
+                tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
+            else:  # "detect": key from the transcription itself, tempo + time signature from the audio
+                tonic, is_minor = detect_key(raw_notes)
+                detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
+                timesig_map = detect_time_signature_map(raw_path)
+                tempo_map, anchor_notes = [(0, detected_bpm)], []
+
+            snapped = snap_to_key(raw_notes, tonic, is_minor)
+            snapped = smooth_velocities(snapped)
+            quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
+            pedal_ticks = []
+            if keep_pedal and pedal_intervals:
+                pedal_ticks = [(int(sec_to_tick(a, segs)), int(sec_to_tick(b, segs))) for a, b in pedal_intervals]
+            final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands), pedal_ticks=pedal_ticks)
+            with open(final_midi, "wb") as f:
+                f.write(final_bytes)
+
+            _set(job_id, status="done", stage="הושלם", path=final_midi, download_name=download_name,
+                 used_fallback=used_fallback, dtw_used=dtw_used)
+    except HTTPException as e:
+        print(f"❌ משימה {job_id} נכשלה: {e.detail}")
+        _set(job_id, status="error", error=str(e.detail))
+    except Exception as err:
+        traceback.print_exc()  # the full traceback lands in the Colab cell output
+        _set(job_id, status="error", error=f"{type(err).__name__}: {err}")
+    finally:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
@@ -702,132 +853,44 @@ async def transcribe(
     keep_pedal: bool = Form(False),
     anchor_midi: UploadFile = File(None),
 ):
-    import uuid
+    """Saves the uploads, starts the pipeline in the background and answers immediately."""
+    if model not in {"piano", "bass", "guitar", "vocals", "other"}:
+        raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
     job_id = uuid.uuid4().hex[:8]
     src_ext = os.path.splitext(file.filename or "")[1] or ".mp3"
     raw_path = f"uploads/{job_id}_raw{src_ext}"
-    stem_wav_path = f"uploads/{job_id}_stem.wav"
-    output_midi = f"outputs/{job_id}.mid"
-    basic_pitch_out = f"outputs/{job_id}_stem_basic_pitch.mid"
-    final_midi = f"outputs/{job_id}_final.mid"
-    sep_dir = f"outputs/{job_id}_sep"
+    with open(raw_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    anchor_path = None
+    if mode == "anchor":
+        if anchor_midi is None:
+            raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+        anchor_path = f"uploads/{job_id}_anchor.mid"
+        with open(anchor_path, "wb") as f:
+            f.write(await anchor_midi.read())
+    JOBS[job_id] = {"status": "queued", "stage": "התקבל", "error": None}
+    threading.Thread(
+        target=_process_job,
+        args=(job_id, raw_path, anchor_path, file.filename, model, mode,
+              manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id}
 
-    DEMUCS_STEMS = {"piano", "bass", "guitar", "vocals", "other"}
-    if model not in DEMUCS_STEMS:
-        raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
 
-    # output filename follows the original upload's name, swapped to .mid
-    orig_stem = os.path.splitext(file.filename or "transcribed")[0] or "transcribed"
-    download_name = f"{orig_stem}.mid"
+@app.get("/status/{job_id}")
+def job_status(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="המשימה לא נמצאה (ייתכן שהשרת הופעל מחדש)")
+    return {k: job.get(k) for k in ("status", "stage", "error", "download_name", "used_fallback", "dtw_used")}
 
-    try:
-        with open(raw_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
 
-        # ---- Demucs: real stem separation on the ORIGINAL full-quality audio
-        # (not downsampled first -- that would hurt separation quality) ----
-        demucs_result = subprocess.run(
-            ["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path],
-            capture_output=True, text=True,
-        )
-        if demucs_result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {demucs_result.stderr[-1500:]}")
-
-        raw_stem_name = os.path.splitext(os.path.basename(raw_path))[0]
-        stem_source = os.path.join(sep_dir, "htdemucs_6s", raw_stem_name, f"{model}.wav")
-        if not os.path.exists(stem_source):
-            raise HTTPException(status_code=500, detail=f"הסטם '{model}' לא נמצא אחרי ההפרדה")
-
-        # המרה ל-WAV תקני -- על הסטם המבודד, לא על כל התערובת
-        conv = subprocess.run(["ffmpeg", "-y", "-i", stem_source, "-ar", "32000", "-ac", "1", stem_wav_path], capture_output=True, text=True)
-        if conv.returncode != 0:
-            raise HTTPException(status_code=500, detail="המרה ראשונית נכשלה")
-
-        used_fallback = False
-        if model == "piano" and PIANO_MODEL is not None:
-            from piano_transcription_inference import sample_rate
-            import librosa
-            audio, _ = librosa.load(stem_wav_path, sr=sample_rate)
-            PIANO_MODEL.transcribe(audio, output_midi)
-        else:
-            if model == "piano":
-                used_fallback = True
-                print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
-            from basic_pitch.inference import predict_and_save
-            predict_and_save([stem_wav_path], "outputs", True, False, False, False)
-            output_midi = basic_pitch_out
-
-        if not os.path.exists(output_midi):
-            raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
-
-        # ---- ghost-note cleanup: drop too-short / too-quiet notes, cap pedal-smeared length ----
-        parsed_model_midi = read_midi_notes_and_map(output_midi)
-        raw_notes_vel = parsed_model_midi["notes"]
-        # pedal events exist only in the piano model's output; they stay separate from note lengths
-        pedal_intervals = parsed_model_midi["pedal"] if (model == "piano" and not used_fallback) else []
-        raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
-        raw_notes = remove_octave_overtones(raw_notes)
-        raw_notes = truncate_sustain_overlaps(raw_notes)
-        if not raw_notes:
-            raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
-
-        # ---- key + tempo: auto-detected, set manually, or read from an anchor/reference MIDI ----
-        dtw_used = False
-        if mode == "anchor":
-            if anchor_midi is None:
-                raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
-            anchor_bytes = await anchor_midi.read()
-            anchor_path = f"uploads/{job_id}_anchor.mid"
-            with open(anchor_path, "wb") as f:
-                f.write(anchor_bytes)
-            anchor = read_midi_notes_and_map(anchor_path)
-            anchor_notes3 = [(p, s, e) for p, s, e, v in anchor["notes"]]
-            tonic, is_minor = detect_key(anchor_notes3)
-            tempo_map, timesig_map, anchor_notes = anchor["tempo_map"], anchor["timesig_map"], anchor_notes3
-            # Chroma DTW: warp the reference's tempo/structure onto the performance's
-            # actual timing (handles tempo drift/rubato). Falls back to the plain
-            # (unwarped) anchor data -- never blocks the user if DTW itself fails.
-            try:
-                tempo_map, timesig_map, anchor_notes = align_reference_to_performance(
-                    anchor["notes"], anchor["tempo_map"], anchor["timesig_map"], stem_wav_path
-                )
-                dtw_used = True
-            except Exception:
-                import traceback
-                print("⚠️ יישור Chroma DTW נכשל -- ממשיך עם ה-MIDI הבסיס הלא-מיושר:")
-                traceback.print_exc()
-        elif mode == "manual":
-            tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
-            tempo_map, timesig_map, anchor_notes = [(0, manual_bpm)], [(0, 4, 4)], []
-        else:  # "detect": key from the transcription itself, tempo + time signature from the audio
-            tonic, is_minor = detect_key(raw_notes)
-            detected_bpm = detect_bpm_from_audio(raw_path)  # full mix tracks tempo more reliably than an isolated stem
-            timesig_map = detect_time_signature_map(raw_path)
-            tempo_map, anchor_notes = [(0, detected_bpm)], []
-
-        snapped = snap_to_key(raw_notes, tonic, is_minor)
-        snapped = smooth_velocities(snapped)
-        quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
-        pedal_ticks = []
-        if keep_pedal and pedal_intervals:
-            pedal_ticks = [(int(sec_to_tick(a, segs)), int(sec_to_tick(b, segs))) for a, b in pedal_intervals]
-        final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands), pedal_ticks=pedal_ticks)
-        with open(final_midi, "wb") as f:
-            f.write(final_bytes)
-
-        resp = FileResponse(final_midi, filename=download_name, media_type="audio/midi")
-        resp.headers["X-Download-Name"] = urllib.parse.quote(download_name)  # ASCII-safe copy of the real name
-        if used_fallback:
-            resp.headers["X-Used-Fallback"] = "basic_pitch_instead_of_piano_model"
-        if mode == "anchor":
-            resp.headers["X-DTW-Used"] = "1" if dtw_used else "0"
-        return resp
-    except HTTPException:
-        raise
-    except Exception as err:
-        print(f"❌ שגיאה בזמן המרה: {err}")
-        raise HTTPException(status_code=500, detail=str(err))
-    finally:
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+@app.get("/download/{job_id}")
+def job_download(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None or job.get("status") != "done":
+        raise HTTPException(status_code=404, detail="הקובץ עדיין לא מוכן או שהמשימה לא נמצאה")
+    resp = FileResponse(job["path"], filename=job["download_name"], media_type="audio/midi")
+    resp.headers["X-Download-Name"] = urllib.parse.quote(job["download_name"])  # ASCII-safe copy of the real name
+    return resp
