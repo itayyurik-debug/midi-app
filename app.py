@@ -784,6 +784,20 @@ HTML_CONTENT = """<!DOCTYPE html>
                 תווים כתובים לכלי מתועתק (סקסופון / חצוצרה ב-Bb / Eb)
             </label>
 
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
+                <input type="checkbox" id="soloMode" style="width:auto">
+                הקלטה של כלי אחד (למשל פסנתר סולו) – בלי הפרדת Demucs (מדויק יותר, וגם מהיר)
+            </label>
+            <div style="margin-top:10px;text-align:right;font-size:0.85rem;color:#94a3b8">
+                משקל:
+                <select id="forceBeats" style="width:auto;display:inline-block;padding:6px">
+                    <option value="0">אוטומטי</option><option value="2">2 פעימות בתיבה (2/4)</option>
+                    <option value="3">3 פעימות בתיבה (3/4)</option><option value="4">4 פעימות בתיבה (4/4)</option>
+                    <option value="5">5 פעימות בתיבה (5/4)</option><option value="6">6 פעימות בתיבה</option>
+                    <option value="7">7 פעימות בתיבה</option>
+                </select>
+            </div>
+
             <button type="submit" id="submitBtn">המר לתווים + MIDI 🚀</button>
         </form>
         <div id="status"></div>
@@ -874,6 +888,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             formData.append('keep_pedal', document.getElementById('keepPedal').checked);
             formData.append('add_chords', document.getElementById('addChords').checked);
             formData.append('written_pitch', document.getElementById('writtenPitch').checked);
+            formData.append('force_beats', document.getElementById('forceBeats').value);
+            formData.append('solo', document.getElementById('soloMode').checked);
             if (mode === 'manual') {
                 formData.append('manual_key_tonic', document.getElementById('keyTonic').value);
                 formData.append('manual_key_mode', document.getElementById('keyMode').value);
@@ -918,9 +934,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
 
                 // 3) download buttons (MIDI / MusicXML for MuseScore / PDF when available)
-                const labels = {midi: '⬇ MIDI', xml: '⬇ MusicXML (MuseScore)', pdf: '⬇ PDF'};
+                const labels = {midi_raw: '⬇ MIDI ביצוע מקורי (מומלץ ל-DAW)', midi: '⬇ MIDI מקוונטז (תואם לתווים)', xml: '⬇ MusicXML (MuseScore)', pdf: '⬇ PDF'};
                 const base = (document.getElementById('audioFile').files[0].name || 'transcribed').replace(/\\.[^.]+$/, '');
-                const extOf = {midi: '.mid', xml: '.musicxml', pdf: '.pdf'};
+                const extOf = {midi_raw: '_performance.mid', midi: '_quantized.mid', xml: '.musicxml', pdf: '.pdf'};
                 status.className = info.used_fallback ? "loading" : "success";
                 let msg = info.used_fallback ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch.<br>" : "✅ ההמרה הושלמה!<br>";
                 msg += (info.n_bars || 0) + ' תיבות | משקל: ' + (info.meter || []).join(', ') + ' | טמפו: ' + (info.tempo || []).join(', ') + ' | אקורדים: ' + (info.n_chords || 0);
@@ -974,7 +990,19 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
     if model == "drums":
         return nt.transcribe_drums(stem_wav), [], False
     used_fallback, pedal, out_mid = False, [], f"{work_prefix}.mid"
-    if model == "piano" and PIANO_MODEL is not None:
+    tk_ok = False
+    if model == "piano" and shutil.which("transkun"):          # best open-source piano model
+        try:
+            if os.path.exists(out_mid):
+                os.remove(out_mid)
+            subprocess.run(["transkun", stem_wav, out_mid, "--device", "cuda" if torch.cuda.is_available() else "cpu"],
+                           capture_output=True, text=True, timeout=1500)
+            tk_ok = os.path.exists(out_mid)
+        except Exception:
+            traceback.print_exc()
+    if tk_ok:
+        pass
+    elif model == "piano" and PIANO_MODEL is not None:
         from piano_transcription_inference import sample_rate
         import librosa
         audio, _ = librosa.load(stem_wav, sr=sample_rate)
@@ -1000,7 +1028,7 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
 
 def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                  manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal,
-                 add_chords=True, written_pitch=False):
+                 add_chords=True, written_pitch=False, force_beats=0, solo=False):
     """Whole pipeline in a background thread (no long HTTP request -> no Cloudflare timeout).
     Demucs -> per-stem transcription -> beats/meter/tempo -> beat-synchronous quantization
     -> staves/voices/keys/chords -> MusicXML + MIDI (+ PDF when MuseScore is installed)."""
@@ -1012,11 +1040,13 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
         _set(job_id, status="queued", stage="ממתין לתורו...")
         with JOB_LOCK:
             _set(job_id, status="running", stage="מפריד כלים עם Demucs (השלב הארוך, בפעם הראשונה גם יורד מודל)...")
-            r = subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True, text=True)
-            if r.returncode != 0:
-                raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {r.stderr[-1500:]}")
+            solo = bool(solo) and model != "all"
             base = os.path.splitext(os.path.basename(raw_path))[0]
             stem_dir = os.path.join(sep_dir, "htdemucs_6s", base)
+            if not solo:
+                r = subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {r.stderr[-1500:]}")
             conv = subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "44100", "-ac", "1", mix_wav], capture_output=True, text=True)
             if conv.returncode != 0:
                 raise HTTPException(status_code=500, detail="המרת המיקס נכשלה")
@@ -1024,7 +1054,7 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
             kinds = ALL_PARTS if model == "all" else [model]
             parts, used_fallback, pedal_events = [], False, None
             for k_i, kind in enumerate(kinds):
-                src_stem = os.path.join(stem_dir, INSTR[kind]["stem"] + ".wav")
+                src_stem = raw_path if solo else os.path.join(stem_dir, INSTR[kind]["stem"] + ".wav")
                 if not os.path.exists(src_stem):
                     raise HTTPException(status_code=500, detail=f"הסטם '{INSTR[kind]['stem']}' לא נמצא אחרי ההפרדה")
                 _set(job_id, stage=f"מתמלל {kind} ({k_i + 1}/{len(kinds)})...")
@@ -1036,6 +1066,9 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                     parts.append(dict(kind=kind, notes=notes, pedal=pedal, stem_wav=stem_wav))
             if not parts:
                 raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
+            for p in parts:                                   # performance-timing copy (for the raw MIDI)
+                p["orig"] = list(p["notes"])
+                p["orig_pedal"] = [e for a_, b_ in p["pedal"] for e in ((a_, 127), (b_, 0))]
 
             _set(job_id, stage="מזהה פעימות, משקל וטמפו...")
             dtw_used, key_notes, to_ref, beat_engine = None, None, None, None
@@ -1067,7 +1100,7 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                 if mode == "detect":
                     try:
                         beats, downs, beat_engine = nt.track_beats(mix_wav, "cuda" if torch.cuda.is_available() else "cpu")
-                        tl = nt.timeline_from_beats(beats, downs, min(all_t), max(all_e), all_t)
+                        tl = nt.timeline_from_beats(beats, downs, min(all_t), max(all_e), all_t, int(force_beats or 0))
                     except Exception:
                         traceback.print_exc()
                         print("⚠️ זיהוי פעימות נכשל -- עובר לטמפו קבוע")
@@ -1075,7 +1108,7 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                     bpm = float(manual_bpm) if mode == "manual" else detect_bpm_from_audio(mix_wav)
                     step = 60.0 / bpm
                     beats = np.arange(0.0, max(all_e) + 4 * step, step)
-                    tl = nt.timeline_from_beats(beats, beats[::4], min(all_t), max(all_e), all_t)
+                    tl = nt.timeline_from_beats(beats, beats[::int(force_beats or 4)], min(all_t), max(all_e), all_t, int(force_beats or 0))
 
             _set(job_id, stage="מצמיד לסולמות, מיישר ומקוונטז...")
             key_override = None
@@ -1113,11 +1146,20 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                     print("⚠️ זיהוי אקורדים נכשל -- ממשיך בלי אקורדים")
 
             _set(job_id, stage="בונה תווים (MusicXML) ו-MIDI...")
+            raw_parts = []
+            for p in parts:
+                rn = p["orig"] if p["kind"] == "drums" else smooth_velocities(
+                    snap_to_key(p["orig"], tonic, is_minor) if mode == "manual" else snap_to_key_dynamic(p["orig"]))
+                raw_parts.append(dict(kind=p["kind"], notes=rn, pedal=p["orig_pedal"] if keep_pedal else None))
+            chords_sec = None
+            if chords and to_ref is None:
+                chords_sec = [(tl.d2t(pos), r_, q_, b_) for pos, r_, q_, b_ in chords]
+            nt.write_raw_midi(out_base + "_raw.mid", raw_parts, chords_sec)
             if model != "all" and model == "piano" and not split_hands:
                 pass   # piano keeps its grand staff (two staves) in the score; the MIDI hand split is always dynamic
             res = nt.engrave([dict(kind=p["kind"], notes=p["notes"], pedal=p["pedal"]) for p in parts], tl, chords,
                              out_base, title=orig_stem, written_pitch=bool(written_pitch), key_override=key_override)
-            files = {"midi": res["midi"], "xml": res["xml"]}
+            files = {"midi_raw": out_base + "_raw.mid", "midi": res["midi"], "xml": res["xml"]}
             ms = _find_musescore()
             if ms:
                 try:
@@ -1157,6 +1199,8 @@ async def transcribe(
     keep_pedal: bool = Form(False),
     add_chords: bool = Form(True),
     written_pitch: bool = Form(False),
+    force_beats: int = Form(0),
+    solo: bool = Form(False),
     anchor_midi: UploadFile = File(None),
 ):
     """Saves the uploads, starts the pipeline in the background and answers immediately."""
@@ -1178,7 +1222,7 @@ async def transcribe(
     threading.Thread(
         target=_process_job,
         args=(job_id, raw_path, anchor_path, file.filename, model, mode,
-              manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal, add_chords, written_pitch),
+              manual_key_tonic, manual_key_mode, manual_bpm, split_hands, keep_pedal, add_chords, written_pitch, force_beats, solo),
         daemon=True,
     ).start()
     return {"job_id": job_id}
@@ -1202,8 +1246,8 @@ def job_download(job_id: str, fmt: str = "midi"):
     path = (job.get("files") or {}).get(fmt)
     if not path:
         raise HTTPException(status_code=404, detail=f"הפורמט {fmt} לא זמין")
-    ext = {"midi": ".mid", "xml": ".musicxml", "pdf": ".pdf"}[fmt]
-    mt = {"midi": "audio/midi", "xml": "application/vnd.recordare.musicxml+xml", "pdf": "application/pdf"}[fmt]
+    ext = {"midi_raw": "_performance.mid", "midi": "_quantized.mid", "xml": ".musicxml", "pdf": ".pdf"}[fmt]
+    mt = {"midi_raw": "audio/midi", "midi": "audio/midi", "xml": "application/vnd.recordare.musicxml+xml", "pdf": "application/pdf"}[fmt]
     name = job["download_name"] + ext
     resp = FileResponse(path, filename=name, media_type=mt)
     resp.headers["X-Download-Name"] = urllib.parse.quote(name)

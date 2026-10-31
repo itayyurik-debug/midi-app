@@ -80,6 +80,7 @@ class Timeline:
         self.pbar = []
         for bi, b in enumerate(bars):
             b["d0"], b["d1"] = int(self.ppos[b["i0"]]), int(self.ppos[b["i1"]])
+            b["d0o"] = b["d0"]; b["lead"] = 0
             self.pbar += [bi] * (b["i1"] - b["i0"])
         self.tempos = tempos                            # [(div_pos, quarter_bpm)]
         self.bar_d0 = [b["d0"] for b in bars]
@@ -118,7 +119,7 @@ def _density(pt, i0, i1, onsets):
     return tern, binc
 
 
-def timeline_from_beats(beats, downbeats, t_min, t_max, onsets):
+def timeline_from_beats(beats, downbeats, t_min, t_max, onsets, force_n=0):
     beats = np.unique(np.round(np.asarray(beats, float), 4))
     med = float(np.median(np.diff(beats)))
     keep = [0]
@@ -141,6 +142,18 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets):
     typ = int(Counter(diffs.tolist()).most_common(1)[0][0]) if len(diffs) else 4
     if typ < 2 or typ > 8:
         typ = 4
+    on_sorted = np.sort(np.asarray(onsets, float))
+    tol = 0.12 * med
+    acc = np.array([np.searchsorted(on_sorted, b + tol) - np.searchsorted(on_sorted, b - tol) for b in beats], float)
+    phase_score = lambda ty: [acc[p::ty].sum() for p in range(ty)]
+    if 2 <= force_n <= 8:                                # user fixed the meter: bar phase from onset accents
+        typ = int(force_n)
+        di = list(range(int(np.argmax(phase_score(typ))), P + 1, typ))
+    elif len(di) >= 3 and float((np.diff(di) == typ).mean()) > 0.8:   # tracker phase sanity check
+        sc = phase_score(typ)
+        cur, best = di[0] % typ, int(np.argmax(sc))
+        if best != cur and sc[best] > 1.3 * max(sc[cur], 1.0):
+            di = list(range(best, P + 1, typ))
     bounds = [di[0]]
     while bounds[0] - typ >= 0:
         bounds.insert(0, bounds[0] - typ)
@@ -154,6 +167,9 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets):
     if bounds[-1] != P:
         bounds.append(P)
     ranges = list(zip(bounds[:-1], bounds[1:]))
+    if ranges and ranges[0][1] - ranges[0][0] > typ:     # first "bar" too long = pickup + a full bar (not 5/4!)
+        a0, b0 = ranges[0]
+        ranges[:1] = [(a0, b0 - typ), (b0 - typ, b0)]
     out = []
     for a, b in ranges:                                  # merge 1-pulse bars
         if b - a == 1 and out:
@@ -168,6 +184,11 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets):
             res += [(int(x), int(y)) for x, y in zip(e[:-1], e[1:]) if y > x]
         else:
             res.append((a, b))
+    if len(res) > 1 and res[-1][1] - res[-1][0] < typ and res[-1][1] == len(beats) - 1:   # pad the last bar to full length
+        miss = typ - (res[-1][1] - res[-1][0])
+        step = float(np.median(np.diff(beats[-9:])))
+        beats = np.concatenate([beats, beats[-1] + step * np.arange(1, miss + 1)])
+        res[-1] = (res[-1][0], res[-1][1] + miss)
     # isolated odd bars (tracker errors) -> normalised to the typical size, pulses re-spaced evenly
     pts, bar_n = [beats[res[0][0]]], []
     for k, (a, b) in enumerate(res):
@@ -603,15 +624,15 @@ def _ok(L, pos, pd, barlen, tri):
     return pos % pd == 0 and (L < barlen or pos == 0)
 
 
-def split_dur(start, dur, pd, barlen, tri_ok):
+def split_dur(start, dur, pd, barlen, tri_ok, lead=0):
     out = []
     while dur > 0:
         for L, tri in _CANDS:
             if tri and not tri_ok:
                 continue
-            if tri_ok and not tri and (start + L) % 8:
+            if tri_ok and not tri and (start + lead + L) % 8:
                 continue                      # triplet bars: stay on the 1/3-beat grid
-            if L <= dur and _ok(L, start, pd, barlen, tri):
+            if L <= dur and _ok(L, start + lead, pd, barlen + lead, tri):
                 break
         else:
             L, tri = min(dur, 6), 0
@@ -737,8 +758,8 @@ def write_musicxml(path, parts, tl, chords, keys, title, written=False):
     tempo_at = dict(tl.tempos)
     ch_by_bar = {}
     for pos, r, q, bs in chords:
-        b = bisect.bisect_right(tl.bar_d0, pos) - 1
-        ch_by_bar.setdefault(b, []).append((pos - tl.bars[b]["d0"], r, q, bs))
+        b = max(0, bisect.bisect_right(tl.bar_d0, pos) - 1)
+        ch_by_bar.setdefault(b, []).append((max(0, pos - tl.bars[b]["d0"]), r, q, bs))
     for pi, p in enumerate(parts):
         kind, cfg = p["kind"], KINDS[p["kind"]]
         pid = "P%d" % (pi + 1)
@@ -748,6 +769,7 @@ def write_musicxml(path, parts, tl, chords, keys, title, written=False):
         last_key, last_ts = None, None
         for bi, bar in enumerate(tl.bars):
             blen = bar["d1"] - bar["d0"]
+            lead = bar.get("lead", 0)
             f, minor, tonic = keys[bi]
             if tr:
                 f = _fifths(((tonic if not minor else (tonic + 3)) - tr[0] - 12 * tr[2]) % 12)
@@ -772,8 +794,8 @@ def write_musicxml(path, parts, tl, chords, keys, title, written=False):
                         tr[1], tr[0], "<octave-change>%d</octave-change>" % tr[2] if tr[2] else ""))
             if attrs:
                 X.append("<attributes>%s</attributes>" % "".join(attrs))
-            if bar["d0"] in tempo_at and pi == 0:
-                bpm = tempo_at[bar["d0"]]
+            if bar["d0o"] in tempo_at and pi == 0:
+                bpm = tempo_at[bar["d0o"]]
                 X.append('<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit>'
                          '<per-minute>%d</per-minute></metronome></direction-type><sound tempo="%.2f"/></direction>' % (round(bpm), bpm))
             if pi == 0:
@@ -796,17 +818,21 @@ def write_musicxml(path, parts, tl, chords, keys, title, written=False):
                     cur, acc = 0, 0
                     seq = []
                     for (s, e, pits, t_start, t_stop) in pieces:
+                        if s < cur:
+                            s = cur
+                        if e <= s:
+                            continue
                         if s > cur:
-                            for (ps, L, tri) in split_dur(cur, s - cur, bar["pd"], blen, tri_ok):
+                            for (ps, L, tri) in split_dur(cur, s - cur, bar["pd"], blen, tri_ok, lead):
                                 seq.append(("rest", L, tri, None, (False, False)))
-                        sp = split_dur(s, e - s, bar["pd"], blen, tri_ok)
+                        sp = split_dur(s, e - s, bar["pd"], blen, tri_ok, lead)
                         for k, (ps, L, tri) in enumerate(sp):
                             tie_stop = (k > 0) or t_start
                             tie_start = (k < len(sp) - 1) or t_stop
                             seq.append(("note", L, tri, pits, (tie_start, tie_stop)))
                         cur = e
                     if cur < blen:
-                        for (ps, L, tri) in split_dur(cur, blen - cur, bar["pd"], blen, tri_ok):
+                        for (ps, L, tri) in split_dur(cur, blen - cur, bar["pd"], blen, tri_ok, lead):
                             seq.append(("rest", L, tri, None, (False, False)))
                     for kind_, L, tri, pits, tie in seq:
                         tup = None
@@ -902,6 +928,31 @@ def write_midi(path, parts, tl, chords, pedal_by_part=None, names=None):
         fh.write(b"MThd" + struct.pack(">IHHH", 6, 1, len(trk), MIDI_PPQ) + b"".join(trk))
 
 
+def write_raw_midi(path, raw_parts, chords_sec=None):
+    """Un-quantized MIDI exactly as transcribed (real timing, durations, velocities, pedal) at a fixed 120 bpm
+    (1 sec = 960 ticks), so it lines up with the original audio in any DAW."""
+    sec = lambda t: int(round(max(t, 0.0) * 960))
+    meta = [(0, 0, b"\xff\x51\x03" + (500000).to_bytes(3, "big")), (0, 0, b"\xff\x58\x04" + bytes([4, 2, 24, 8]))]
+    for t, r, q, bs in (chords_sec or []):
+        txt = (_SHARP_N[r] + _QUAL[q][1] + ("/" + _SHARP_N[bs] if bs is not None else "")).encode("utf-8")
+        meta.append((sec(t), 1, b"\xff\x06" + _vlq(len(txt)) + txt))
+    trk, ch = [_track(meta, "Tempo / Chords")], 0
+    for p in raw_parts:
+        cfg = KINDS[p["kind"]]
+        is_dr = p["kind"] == "drums"
+        channel = 9 if is_dr else (ch if ch < 9 else ch + 1)
+        ch += 0 if is_dr else 1
+        ev = [] if is_dr else [(0, 0, bytes([0xC0 | channel, cfg["prog"]]))]
+        for pp, s, e, v in p["notes"]:
+            ev.append((sec(s), 3, bytes([0x90 | channel, int(pp), int(np.clip(v, 1, 127))])))
+            ev.append((max(sec(e), sec(s) + 1), 1, bytes([0x80 | channel, int(pp), 0])))
+        for t, val in (p.get("pedal") or []):
+            ev.append((sec(t), 2, bytes([0xB0 | channel, 64, 127 if val else 0])))
+        trk.append(_track(ev, cfg["name"]))
+    with open(path, "wb") as fh:
+        fh.write(b"MThd" + struct.pack(">IHHH", 6, 1, len(trk), MIDI_PPQ) + b"".join(trk))
+
+
 # =============================================================================
 # 6) Orchestrator
 # =============================================================================
@@ -910,14 +961,22 @@ def engrave(parts_in, tl, chords, out_base, title="Transcription", written_pitch
     Returns {'midi': path, 'xml': path}."""
     onsets = [n[1] for p in parts_in if p["kind"] != "drums" for n in p["notes"]]
     choose_feels(tl, onsets)
-    parts, all_notes, pedal = [], [], None
+    parts, all_notes, pedal, qs = [], [], None, []
     for p in parts_in:
         nd = quantize_notes(p["notes"], tl)
         if p["kind"] == "drums":                                  # fixed short hits
             for n in nd:
                 n["e"] = n["s"] + (8 if tl.tri[tl.pbar[tl.pulse_at(n["s"])]] else 6)
-        if not nd:
-            continue
+        if nd:
+            qs.append((p, nd))
+    if qs and tl.bars[0]["pickup"]:                               # pickup: start the bar at the first note
+        s0 = min(n["s"] for _, nd in qs for n in nd)
+        b0 = tl.bars[0]
+        lead = ((s0 - b0["d0"]) // 6) * 6
+        if lead >= 6 and s0 < b0["d1"]:
+            b0["d0"] += lead; b0["lead"] = lead
+            tl.bar_d0[0] = b0["d0"]
+    for p, nd in qs:
         objs = _build_part_objs(p["kind"], nd)
         parts.append(dict(kind=p["kind"], objs=objs))
         if p["kind"] != "drums":
