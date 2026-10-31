@@ -140,13 +140,13 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets, force_n=0):
     P = len(beats) - 1
     diffs = np.diff(di)
     typ = int(Counter(diffs.tolist()).most_common(1)[0][0]) if len(diffs) else 4
-    if typ < 2 or typ > 8:
+    if typ < 2 or typ > 16:
         typ = 4
     on_sorted = np.sort(np.asarray(onsets, float))
     tol = 0.12 * med
     acc = np.array([np.searchsorted(on_sorted, b + tol) - np.searchsorted(on_sorted, b - tol) for b in beats], float)
     phase_score = lambda ty: [acc[p::ty].sum() for p in range(ty)]
-    if 2 <= force_n <= 8:                                # user fixed the meter: bar phase from onset accents
+    if 2 <= force_n <= 16:                                # user fixed the meter: bar phase from onset accents
         typ = int(force_n)
         di = list(range(int(np.argmax(phase_score(typ))), P + 1, typ))
     elif len(di) >= 3 and float((np.diff(di) == typ).mean()) > 0.8:   # tracker phase sanity check
@@ -177,8 +177,8 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets, force_n=0):
         else:
             out.append((a, b))
     res = []
-    for a, b in out:                                     # split overly long bars
-        if b - a > 12:
+    for a, b in out:                                     # split overly long bars (tracker errors, not real big meters)
+        if b - a > max(12, typ):
             k = max(2, int(round((b - a) / typ)))
             e = np.linspace(a, b, k + 1).round().astype(int)
             res += [(int(x), int(y)) for x, y in zip(e[:-1], e[1:]) if y > x]
@@ -213,7 +213,7 @@ def timeline_from_beats(beats, downbeats, t_min, t_max, onsets, force_n=0):
         lo, hi = max(0, bi - 2), min(len(bar_n), bi + 3)
         tern = sum(d[0] for d in dens[lo:hi]); binc = sum(d[1] for d in dens[lo:hi])
         pbpm = 60.0 / float(np.median(np.diff(pt[i0:i0 + n + 1])))
-        if n in (6, 9, 12) and pbpm >= 100:
+        if n >= 5 and pbpm >= 100:                       # fast pulses -> the bar is counted in eighths (5/8, 7/8, 11/8, 13/8, ...)
             kind, pd, num, den = "eighth", 12, n, 8
         elif n in (2, 3) and tern > 1.6 * binc and tern + binc >= 6:
             kind, pd, num, den = "compound", 36, 3 * n, 8

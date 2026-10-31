@@ -793,8 +793,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <select id="forceBeats" style="width:auto;display:inline-block;padding:6px">
                     <option value="0">אוטומטי</option><option value="2">2 פעימות בתיבה (2/4)</option>
                     <option value="3">3 פעימות בתיבה (3/4)</option><option value="4">4 פעימות בתיבה (4/4)</option>
-                    <option value="5">5 פעימות בתיבה (5/4)</option><option value="6">6 פעימות בתיבה</option>
-                    <option value="7">7 פעימות בתיבה</option>
+                    <option value="5">5 פעימות בתיבה</option><option value="6">6 פעימות בתיבה</option>
+                    <option value="7">7 פעימות בתיבה</option><option value="9">9 פעימות בתיבה</option>
+                    <option value="11">11 פעימות בתיבה</option><option value="13">13 פעימות בתיבה</option>
                 </select>
             </div>
 
