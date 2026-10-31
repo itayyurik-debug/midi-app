@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import torch
 import gc
+import urllib.parse
 import mido
 
 app = FastAPI(title="Audio to MIDI Pipeline")
@@ -21,7 +22,7 @@ def read_midi_notes_and_map(path):
     """Read any standard MIDI file -> full tempo map, time-sig map, notes as (pitch, start_sec, end_sec)."""
     mid = mido.MidiFile(str(path))
     ppq = mid.ticks_per_beat
-    tempo_events, timesig_events, notes = [], [], []
+    tempo_events, timesig_events, notes, pedal_events = [], [], [], []
     for track in mid.tracks:
         time = 0
         active = {}
@@ -31,6 +32,8 @@ def read_midi_notes_and_map(path):
                 tempo_events.append((time, msg.tempo))
             elif msg.type == "time_signature":
                 timesig_events.append((time, msg.numerator, msg.denominator))
+            elif msg.type == "control_change" and msg.control == 64:
+                pedal_events.append((time, msg.value))  # sustain pedal, kept apart from note durations
             elif msg.type == "note_on" and msg.velocity > 0:
                 active[msg.note] = (time, msg.velocity)
             elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
@@ -62,13 +65,28 @@ def read_midi_notes_and_map(path):
     tempo_map = [(tick_to_sec(t), round(60e6 / us)) for t, us in tempo_events]
     timesig_map = [(tick_to_sec(t), n, d) for t, n, d in timesig_events]
     note_list = [(p, tick_to_sec(s), tick_to_sec(e), v) for p, s, e, v in notes]
-    return {"tempo_map": tempo_map, "timesig_map": timesig_map, "notes": note_list}
+
+    # pedal-down intervals in seconds: [(down_sec, up_sec), ...]
+    pedal_intervals, down_at = [], None
+    for t, val in sorted(pedal_events):
+        if val >= 64 and down_at is None:
+            down_at = t
+        elif val < 64 and down_at is not None:
+            a, b = tick_to_sec(down_at), tick_to_sec(t)
+            if b > a:
+                pedal_intervals.append((a, b))
+            down_at = None
+    if down_at is not None and pedal_events:
+        a, b = tick_to_sec(down_at), tick_to_sec(max(t for t, _ in pedal_events))
+        if b > a:
+            pedal_intervals.append((a, b))
+    return {"tempo_map": tempo_map, "timesig_map": timesig_map, "notes": note_list, "pedal": pedal_intervals}
 
 
 def filter_ghost_notes(notes_with_vel, min_duration=0.03, min_velocity=15, max_duration=4.0):
     """Drop too-short / too-quiet notes (ghost notes), and cap note length to tame
-    sustain-pedal smearing. Returns plain (pitch, start, end) tuples (velocity dropped
-    after filtering -- the output MIDI always writes a fixed velocity)."""
+    sustain-pedal smearing. Returns (pitch, start, end, velocity) tuples -- velocity is
+    carried through the pipeline so it can be smoothed and written to the output."""
     out = []
     for pitch, start, end, vel in notes_with_vel:
         dur = end - start
@@ -76,7 +94,7 @@ def filter_ghost_notes(notes_with_vel, min_duration=0.03, min_velocity=15, max_d
             continue
         if dur > max_duration:
             end = start + max_duration
-        out.append((pitch, start, end))
+        out.append((pitch, start, end, vel))
     return out
 
 
@@ -85,16 +103,18 @@ def remove_octave_overtones(notes, time_tolerance=0.05):
     octaves below it and lasts no longer -- a common false-positive when a bass
     note's harmonic resonance gets mis-detected as a separate note."""
     out = []
-    for i, (pitch, start, end) in enumerate(notes):
+    for i, n in enumerate(notes):
+        pitch, start, end = n[0], n[1], n[2]
         is_overtone = False
-        for j, (pitch2, start2, end2) in enumerate(notes):
+        for j, m in enumerate(notes):
+            pitch2, start2, end2 = m[0], m[1], m[2]
             if i == j or pitch2 == pitch:
                 continue
             if (pitch - pitch2) in (12, 24) and abs(start - start2) <= time_tolerance and (end - start) <= (end2 - start2) + time_tolerance:
                 is_overtone = True
                 break
         if not is_overtone:
-            out.append((pitch, start, end))
+            out.append(n)
     return out
 
 
@@ -157,11 +177,13 @@ def truncate_sustain_overlaps(notes, pitch_range=4):
     semitones of it, shorten the earlier note to end where the next one begins --
     mitigates pedal-smeared notes bleeding into later phrases."""
     out = list(notes)
-    for i, (pitch, start, end) in enumerate(out):
-        for pitch2, start2, end2 in out:
+    for i, n in enumerate(out):
+        pitch, start, end = n[0], n[1], n[2]
+        for m in out:
+            pitch2, start2 = m[0], m[1]
             if start2 > start and start2 < end and abs(pitch2 - pitch) <= pitch_range:
                 end = min(end, start2)
-        out[i] = (pitch, start, end)
+        out[i] = (pitch, start, end) + tuple(n[3:])
     return out
 
 
@@ -226,7 +248,8 @@ def detect_bpm_from_audio(wav_path):
 
 def detect_key(notes):
     hist = [0.0] * 12
-    for pitch, start, end in notes:
+    for n in notes:
+        pitch, start, end = n[0], n[1], n[2]
         hist[pitch % 12] += max(0.05, end - start)
     best = (-1e18, 0, False)
     for tonic in range(12):
@@ -240,10 +263,12 @@ def detect_key(notes):
 def snap_to_key(notes, tonic, is_minor):
     scale = {(x + tonic) % 12 for x in ([0, 2, 3, 5, 7, 8, 10] if is_minor else [0, 2, 4, 5, 7, 9, 11])}
     out = []
-    for pitch, start, end in notes:
+    for n in notes:
+        pitch, start, end = n[0], n[1], n[2]
+        extra = tuple(n[3:])
         pc = pitch % 12
         if pc in scale:
-            out.append((pitch, start, end))
+            out.append((pitch, start, end) + extra)
             continue
         best_s, best_d = pc, 99
         for s in scale:
@@ -251,7 +276,7 @@ def snap_to_key(notes, tonic, is_minor):
             if d < best_d:
                 best_d, best_s = d, s
         new_pitch = pitch + ((best_s - pc + 18) % 12 - 6) if best_d <= 1 else pitch
-        out.append((new_pitch, start, end))
+        out.append((new_pitch, start, end) + extra)
     return out
 
 
@@ -272,6 +297,24 @@ def sec_to_tick(sec, segs):
     return 0.0
 
 
+def smooth_velocities(notes, window=3, blend=0.6, lo=35, hi=110):
+    """Velocity smoothing: pull every note's velocity toward the average of its
+    neighbours (in time order) and clamp it, so the output has an even dynamic
+    shape instead of jumpy model noise. Notes without a velocity get 80."""
+    if not notes:
+        return notes
+    order = sorted(range(len(notes)), key=lambda i: notes[i][1])
+    vels = [(notes[i][3] if len(notes[i]) > 3 else 80) for i in order]
+    out = list(notes)
+    n = len(order)
+    for k, i in enumerate(order):
+        a, b = max(0, k - window), min(n, k + window + 1)
+        avg = sum(vels[a:b]) / (b - a)
+        v = int(round((1 - blend) * vels[k] + blend * avg))
+        out[i] = tuple(notes[i][:3]) + (max(lo, min(hi, v)),)
+    return out
+
+
 def quantize_notes(bp_notes, tempo_map, anchor_notes):
     segs = build_segments(tempo_map, PPQ_OUT)
     grid = PPQ_OUT // 4
@@ -280,21 +323,46 @@ def quantize_notes(bp_notes, tempo_map, anchor_notes):
         offsets = sorted(int(sec_to_tick(s, segs)) % grid for _, s, _ in anchor_notes)
         phase = offsets[len(offsets) // 2]
     out = []
-    for pitch, start, end in bp_notes:
+    for n in bp_notes:
+        pitch, start, end = n[0], n[1], n[2]
         s_tick = sec_to_tick(start, segs)
         e_tick = sec_to_tick(end, segs)
         q_s = round((s_tick - phase) / grid) * grid + phase
         q_d = max(grid, round((e_tick - s_tick) / grid) * grid)
-        out.append((pitch, max(0, int(q_s)), int(q_d)))
+        out.append((pitch, max(0, int(q_s)), int(q_d)) + tuple(n[3:]))
     return out, segs
 
 
-def _notes_track(notes, channel=0):
+def split_hands_dynamic(notes, window_ticks=PPQ_OUT * 8, lo=55, hi=65, default=60):
+    """Dynamic hand split: instead of a fixed middle C, the split point follows the
+    median pitch of the notes around each note (about +-8 beats), clamped to
+    [lo, hi]. Notes at/above the local split go to the right hand (treble), the rest
+    to the left hand (bass). Sparse passages (<3 nearby notes) fall back to middle C.
+    Notes are (pitch, start_tick, dur_tick[, velocity])."""
+    import bisect
+    if not notes:
+        return [], []
+    order = sorted(range(len(notes)), key=lambda i: notes[i][1])
+    starts = [notes[i][1] for i in order]
+    pitches = [notes[i][0] for i in order]
+    right, left = [], []
+    for k, i in enumerate(order):
+        a = bisect.bisect_left(starts, starts[k] - window_ticks)
+        b = bisect.bisect_right(starts, starts[k] + window_ticks)
+        local = sorted(pitches[a:b])
+        split = default if len(local) < 3 else max(lo, min(hi, local[len(local) // 2]))
+        (right if notes[i][0] >= split else left).append(notes[i])
+    return right, left
+
+
+def _pedal_track(intervals_ticks, channel=0):
+    """Sustain pedal as separate CC64 events -- independent of the real note lengths."""
     tr = mido.MidiTrack()
     evs = []
-    for pitch, s_tick, d_tick in notes:
-        evs.append((s_tick, mido.Message("note_on", note=int(pitch), velocity=90, channel=channel)))
-        evs.append((s_tick + d_tick, mido.Message("note_off", note=int(pitch), velocity=0, channel=channel)))
+    for a, b in intervals_ticks:
+        if b > a:
+            evs.append((a, mido.Message("control_change", channel=channel, control=64, value=127)))
+            evs.append((b, mido.Message("control_change", channel=channel, control=64, value=0)))
     evs.sort(key=lambda e: e[0])
     last_t = 0
     for tick, msg in evs:
@@ -305,7 +373,25 @@ def _notes_track(notes, channel=0):
     return tr
 
 
-def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split_hands=False):
+def _notes_track(notes, channel=0):
+    tr = mido.MidiTrack()
+    evs = []
+    for n in notes:
+        pitch, s_tick, d_tick = n[0], n[1], n[2]
+        vel = max(1, min(127, int(n[3]))) if len(n) > 3 else 90
+        evs.append((s_tick, 1, mido.Message("note_on", note=int(pitch), velocity=vel, channel=channel)))
+        evs.append((s_tick + d_tick, 0, mido.Message("note_off", note=int(pitch), velocity=0, channel=channel)))
+    evs.sort(key=lambda e: (e[0], e[1]))  # at equal ticks: note_off before note_on
+    last_t = 0
+    for tick, _order, msg in evs:
+        msg.time = max(0, round(tick - last_t))
+        tr.append(msg)
+        last_t = max(last_t, tick)
+    tr.append(mido.MetaMessage("end_of_track"))
+    return tr
+
+
+def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split_hands=False, pedal_ticks=None):
     events = []
     for t, bpm in tempo_map:
         events.append((sec_to_tick(t, segs), mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm))))
@@ -323,11 +409,14 @@ def build_output_midi_bytes(quantized_notes, tempo_map, timesig_map, segs, split
     out_mid = mido.MidiFile(ticks_per_beat=PPQ_OUT)
     out_mid.tracks.append(meta_track)
     if split_hands:
-        # Right hand (treble): pitch >= 60 (middle C). Left hand (bass): below.
-        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] >= 60], channel=0))
-        out_mid.tracks.append(_notes_track([n for n in quantized_notes if n[0] < 60], channel=1))
+        # Right hand (treble) / left hand (bass), split point follows the music (see split_hands_dynamic).
+        right, left = split_hands_dynamic(quantized_notes)
+        out_mid.tracks.append(_notes_track(right, channel=0))
+        out_mid.tracks.append(_notes_track(left, channel=1))
     else:
         out_mid.tracks.append(_notes_track(quantized_notes, channel=0))
+    if pedal_ticks:
+        out_mid.tracks.append(_pedal_track(pedal_ticks, channel=0))
     buf = io.BytesIO()
     out_mid.save(file=buf)
     return buf.getvalue()
@@ -338,6 +427,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Download-Name", "X-Used-Fallback", "X-DTW-Used"],
 )
 
 os.makedirs("uploads", exist_ok=True)
@@ -452,6 +542,11 @@ HTML_CONTENT = """<!DOCTYPE html>
                 פיצול לשתי ידיים (ליד ימין/שמאל, רק לפסנתר)
             </label>
 
+            <label id="pedalRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
+                <input type="checkbox" id="keepPedal" style="width:auto">
+                שמור פדל סאסטיין כאירועים נפרדים (CC64), בלי למתוח את התווים
+            </label>
+
             <button type="submit" id="submitBtn">המר ל-MIDI 🚀</button>
         </form>
         <div id="status"></div>
@@ -513,7 +608,9 @@ HTML_CONTENT = """<!DOCTYPE html>
             document.getElementById('pane-anchor').classList.toggle('active', m === 'anchor');
         }
         document.getElementById('modelSelect').addEventListener('change', function(){
-            document.getElementById('splitRow').style.display = (this.value === 'piano') ? 'flex' : 'none';
+            const isPiano = (this.value === 'piano');
+            document.getElementById('splitRow').style.display = isPiano ? 'flex' : 'none';
+            document.getElementById('pedalRow').style.display = isPiano ? 'flex' : 'none';
         });
 
         document.getElementById('transcribeForm').onsubmit = async (e) => {
@@ -528,7 +625,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             }
 
             status.className = "loading";
-            status.innerText = "⏳ מעבד שמע ב-GPU... ייקח כ-3 שניות";
+            status.innerText = "⏳ מפריד כלים ומתמלל... זה יכול לקחת כמה דקות, אל תסגור את הדף";
             btn.disabled = true;
             btn.style.opacity = "0.5";
 
@@ -537,6 +634,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             formData.append('model', document.getElementById('modelSelect').value);
             formData.append('mode', mode);
             formData.append('split_hands', document.getElementById('splitHands').checked);
+            formData.append('keep_pedal', document.getElementById('keepPedal').checked);
             if (mode === 'manual') {
                 formData.append('manual_key_tonic', document.getElementById('keyTonic').value);
                 formData.append('manual_key_mode', document.getElementById('keyMode').value);
@@ -550,9 +648,14 @@ HTML_CONTENT = """<!DOCTYPE html>
                 if (res.ok) {
                     const usedFallback = res.headers.get('X-Used-Fallback');
                     const dtwUsed = res.headers.get('X-DTW-Used');
-                    const disp = res.headers.get('Content-Disposition') || '';
-                    const m = disp.match(/filename="?([^"]+)"?/);
-                    const outName = m ? m[1] : 'transcribed.mid';
+                    // download name = the uploaded file's own name (works even if a header gets mangled)
+                    const upName = document.getElementById('audioFile').files[0].name || 'transcribed';
+                    const dot = upName.lastIndexOf('.');
+                    let outName = (dot > 0 ? upName.slice(0, dot) : upName) + '.mid';
+                    try {
+                        const hdr = res.headers.get('X-Download-Name');
+                        if (hdr) outName = decodeURIComponent(hdr);
+                    } catch (e) {}
                     const blob = await res.blob();
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -596,6 +699,7 @@ async def transcribe(
     manual_key_mode: str = Form("major"),
     manual_bpm: float = Form(120.0),
     split_hands: bool = Form(False),
+    keep_pedal: bool = Form(False),
     anchor_midi: UploadFile = File(None),
 ):
     import uuid
@@ -657,7 +761,10 @@ async def transcribe(
             raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
 
         # ---- ghost-note cleanup: drop too-short / too-quiet notes, cap pedal-smeared length ----
-        raw_notes_vel = read_midi_notes_and_map(output_midi)["notes"]
+        parsed_model_midi = read_midi_notes_and_map(output_midi)
+        raw_notes_vel = parsed_model_midi["notes"]
+        # pedal events exist only in the piano model's output; they stay separate from note lengths
+        pedal_intervals = parsed_model_midi["pedal"] if (model == "piano" and not used_fallback) else []
         raw_notes = filter_ghost_notes(raw_notes_vel, min_duration=0.06, min_velocity=15, max_duration=4.0)
         raw_notes = remove_octave_overtones(raw_notes)
         raw_notes = truncate_sustain_overlaps(raw_notes)
@@ -699,12 +806,17 @@ async def transcribe(
             tempo_map, anchor_notes = [(0, detected_bpm)], []
 
         snapped = snap_to_key(raw_notes, tonic, is_minor)
+        snapped = smooth_velocities(snapped)
         quantized, segs = quantize_notes(snapped, tempo_map, anchor_notes)
-        final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands))
+        pedal_ticks = []
+        if keep_pedal and pedal_intervals:
+            pedal_ticks = [(int(sec_to_tick(a, segs)), int(sec_to_tick(b, segs))) for a, b in pedal_intervals]
+        final_bytes = build_output_midi_bytes(quantized, tempo_map, timesig_map, segs, split_hands=bool(split_hands), pedal_ticks=pedal_ticks)
         with open(final_midi, "wb") as f:
             f.write(final_bytes)
 
         resp = FileResponse(final_midi, filename=download_name, media_type="audio/midi")
+        resp.headers["X-Download-Name"] = urllib.parse.quote(download_name)  # ASCII-safe copy of the real name
         if used_fallback:
             resp.headers["X-Used-Fallback"] = "basic_pitch_instead_of_piano_model"
         if mode == "anchor":
