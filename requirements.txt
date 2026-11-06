@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+torch
+torchaudio
+basic-pitch
+onnxruntime
+librosa
+mido
+soundfile
+scipy
+numpy<2.0.0
