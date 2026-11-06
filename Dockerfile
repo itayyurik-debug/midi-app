@@ -13,7 +13,8 @@ COPY requirements.txt ./
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN python - <<'PY'
+ENV XDG_CACHE_HOME=/app/.cache
+RUN mkdir -p $XDG_CACHE_HOME && python - <<'PY'
 from demucs import pretrained
 pretrained.get_model('htdemucs')
 PY
