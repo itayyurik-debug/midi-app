@@ -14,10 +14,8 @@ RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 ENV XDG_CACHE_HOME=/app/.cache
-RUN mkdir -p $XDG_CACHE_HOME && python - <<'PY'
-from demucs import pretrained
-pretrained.get_model('htdemucs')
-PY
+RUN mkdir -p $XDG_CACHE_HOME
+RUN python -c "from demucs import pretrained; pretrained.get_model('light')"
 
 # Copy the rest of the application code
 COPY . ./
