@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: midi-app
+    env: docker
+    dockerfilePath: Dockerfile
+    autoDeploy: true
+    envVars: []
