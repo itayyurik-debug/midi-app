@@ -10,3 +10,4 @@ mido
 soundfile
 scipy
 numpy<2.0.0
+demucs
