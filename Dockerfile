@@ -13,6 +13,11 @@ COPY requirements.txt ./
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+RUN python - <<'PY'
+from demucs import pretrained
+pretrained.get_model('htdemucs')
+PY
+
 # Copy the rest of the application code
 COPY . ./
 
