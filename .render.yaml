@@ -5,3 +5,6 @@ services:
     dockerfilePath: Dockerfile
     autoDeploy: true
     envVars: []
+    branch: main
+# Force redeploy
+
