@@ -13,6 +13,7 @@ import urllib.parse
 import uuid
 import mido
 import numpy as np
+import uvicorn
 import copy
 import notation as nt   # score engine: beats/meter/tempo -> MusicXML + MIDI + chords
 
@@ -226,6 +227,7 @@ def _audio_chroma(wav_path, hop_length=1024, sr_target=22050):
 
 def _midi_notes_to_chroma(notes4, duration_sec, hop_length, sr):
     import numpy as np
+import uvicorn
     frame_time = hop_length / sr
     n_frames = max(1, int(duration_sec / frame_time) + 1)
     chroma = np.zeros((12, n_frames))
@@ -243,6 +245,7 @@ def build_perf_to_ref(anchor_notes4, perf_wav_path):
     performance time (sec) onto the anchor's timeline, so transcribed notes can wear the
     anchor's exact tempo map / time signatures. Raises on failure (caller falls back)."""
     import numpy as np
+import uvicorn
     import librosa
     chroma_perf, hop, sr = _audio_chroma(perf_wav_path)
     ref_dur = max((e for _, _, e, *_ in anchor_notes4), default=1.0)
@@ -283,6 +286,7 @@ def _timesig_for_segment(y_seg, sr):
     meter, and is NOT reliable for irregular/mixed meters (7/8, 13/8, etc.):
     no simple algorithm (this one included) detects those with real confidence."""
     import numpy as np
+import uvicorn
     import librosa
     onset_env = librosa.onset.onset_strength(y=y_seg, sr=sr)
     _, beat_frames = librosa.beat.beat_track(y=y_seg, sr=sr, onset_envelope=onset_env)
@@ -329,6 +333,7 @@ def detect_time_signature_map(wav_path, window_sec=20.0):
 def detect_bpm_from_audio(wav_path):
     """Audio-only tempo estimate, for the 'auto-detect' mode when no anchor MIDI is given."""
     import numpy as np
+import uvicorn
     import librosa
     y, sr = librosa.load(wav_path, sr=None)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)

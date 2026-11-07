@@ -4,7 +4,10 @@ services:
     env: docker
     dockerfilePath: Dockerfile
     autoDeploy: true
-    envVars: []
+    envVars:
+      - name: HF_TOKEN
+        value: ""
     branch: main
 # Force redeploy
+
 
