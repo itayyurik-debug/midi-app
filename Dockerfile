@@ -15,7 +15,8 @@ RUN python -m pip install --upgrade pip && \
 
 ENV XDG_CACHE_HOME=/app/.cache
 RUN mkdir -p $XDG_CACHE_HOME
-RUN python -c "from demucs import pretrained; pretrained.get_model('light')"
+# Optional: pre-download minimal Demucs model (demucs_ft)
+# RUN python -c "from demucs import pretrained; pretrained.get_model('demucs_ft')"
 
 # Copy the rest of the application code
 COPY . ./
@@ -24,4 +25,4 @@ COPY . ./
 EXPOSE 7860
 
 # Command to run the FastAPI app with uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "${PORT:-7860}"]
