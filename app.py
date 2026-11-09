@@ -17,7 +17,11 @@ import uvicorn
 import copy
 import notation as nt   # score engine: beats/meter/tempo -> MusicXML + MIDI + chords
 
-app = FastAPI(title="Audio to MIDI Pipeline")
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 
 # ---------- key detection + tempo-map quantization (shared with the local-pipeline project) ----------
 MAJ_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
