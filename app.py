@@ -231,7 +231,6 @@ def _audio_chroma(wav_path, hop_length=1024, sr_target=22050):
 
 def _midi_notes_to_chroma(notes4, duration_sec, hop_length, sr):
     import numpy as np
-import uvicorn
     frame_time = hop_length / sr
     n_frames = max(1, int(duration_sec / frame_time) + 1)
     chroma = np.zeros((12, n_frames))
@@ -621,28 +620,28 @@ os.makedirs("uploads", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"⚡ מפעיל התקן עיבוד: {DEVICE}")
+print(f"ג¡ ׳׳₪׳¢׳™׳ ׳”׳×׳§׳ ׳¢׳™׳‘׳•׳“: {DEVICE}")
 
 PIANO_MODEL = None
 try:
     from piano_transcription_inference import PianoTranscription
-    print("⏳ טוען את מודל הפסנתר ל-GPU מראש...")
+    print("ג³ ׳˜׳•׳¢׳ ׳׳× ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳-GPU ׳׳¨׳׳©...")
     PIANO_MODEL = PianoTranscription(device=DEVICE)
-    print("✅ מודל הפסנתר נטען בהצלחה!")
+    print("ג… ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳ ׳˜׳¢׳ ׳‘׳”׳¦׳׳—׳”!")
 except Exception:
     import traceback
-    print("⚠️ שגיאה בטעינת מודל הפסנתר -- המודל הכללי (Basic Pitch) ישמש כגיבוי אוטומטי:")
+    print("ג ן¸ ׳©׳’׳™׳׳” ׳‘׳˜׳¢׳™׳ ׳× ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ -- ׳”׳׳•׳“׳ ׳”׳›׳׳׳™ (Basic Pitch) ׳™׳©׳׳© ׳›׳’׳™׳‘׳•׳™ ׳׳•׳˜׳•׳׳˜׳™:")
     traceback.print_exc()  # full traceback, not just str(e) -- needed to actually diagnose this
 
 MUSCRIPTOR_MODEL = None
 try:
     from muscriptor import TranscriptionModel
-    print("⏳ טוען את MuScriptor (מודל תמלול כללי לכל הכלים) מראש...")
+    print("ג³ ׳˜׳•׳¢׳ ׳׳× MuScriptor (׳׳•׳“׳ ׳×׳׳׳•׳ ׳›׳׳׳™ ׳׳›׳ ׳”׳›׳׳™׳) ׳׳¨׳׳©...")
     MUSCRIPTOR_MODEL = TranscriptionModel.load_model("medium")
-    print("✅ MuScriptor נטען בהצלחה!")
+    print("ג… MuScriptor ׳ ׳˜׳¢׳ ׳‘׳”׳¦׳׳—׳”!")
 except Exception:
     import traceback as _tb                              # local import: safe even if PIANO_MODEL loaded fine above
-    print("⚠️ MuScriptor לא זמין (לא מותקן או נכשל בטעינה) -- ממשיך עם השרשרת הקיימת:")
+    print("ג ן¸ MuScriptor ׳׳ ׳–׳׳™׳ (׳׳ ׳׳•׳×׳§׳ ׳׳• ׳ ׳›׳©׳ ׳‘׳˜׳¢׳™׳ ׳”) -- ׳׳׳©׳™׳ ׳¢׳ ׳”׳©׳¨׳©׳¨׳× ׳”׳§׳™׳™׳׳×:")
     _tb.print_exc()
 
 BP_PREDICT, BP_MODEL = None, None
@@ -662,7 +661,7 @@ def basic_pitch_to_midi(wav_path, out_midi, model_key):
     """FIX: uses predict() with the model passed explicitly (no predict_and_save), tuned per instrument."""
     import librosa
     if BP_PREDICT is None:
-        raise RuntimeError("Basic Pitch לא מותקן")
+        raise RuntimeError("Basic Pitch ׳׳ ׳׳•׳×׳§׳")
     cfg = INSTR.get(model_key, INSTR["other"])
     kw = dict(onset_threshold=0.6 if cfg["mono"] else 0.5,
               frame_threshold=0.35 if cfg["mono"] else 0.3,
@@ -681,7 +680,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ממיר שמע לתווים ול-MIDI</title>
+    <title>׳׳׳™׳¨ ׳©׳׳¢ ׳׳×׳•׳•׳™׳ ׳•׳-MIDI</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #15130f; color: #ede6d6; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
         #bgCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
@@ -727,8 +726,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 <body>
     <canvas id="bgCanvas"></canvas>
     <div class="card">
-        <h1>🎹 ממיר שמע לתווים ול-MIDI</h1>
-        <p>משלב לשלב: קובץ &rarr; כלי &rarr; קצב וסולם &rarr; אפשרויות &rarr; המרה</p>
+        <h1>נ¹ ׳׳׳™׳¨ ׳©׳׳¢ ׳׳×׳•׳•׳™׳ ׳•׳-MIDI</h1>
+        <p>׳׳©׳׳‘ ׳׳©׳׳‘: ׳§׳•׳‘׳¥ &rarr; ׳›׳׳™ &rarr; ׳§׳¦׳‘ ׳•׳¡׳•׳׳ &rarr; ׳׳₪׳©׳¨׳•׳™׳•׳× &rarr; ׳”׳׳¨׳”</p>
         <div class="stepper" id="stepper">
             <div class="pt active" data-i="0"><div class="dot"></div></div><div class="seg"></div>
             <div class="pt" data-i="1"><div class="dot"></div></div><div class="seg"></div>
@@ -738,65 +737,65 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <form id="transcribeForm">
             <div class="stepstage active" id="step0">
-            <h2>1. קובץ השמע</h2>
+            <h2>1. ׳§׳•׳‘׳¥ ׳”׳©׳׳¢</h2>
             <div class="upload-box" onclick="document.getElementById('audioFile').click()">
-                <span id="fileName">📁 לחץ כאן לבחירת קובץ MP3</span>
+                <span id="fileName">נ“ ׳׳—׳¥ ׳›׳׳ ׳׳‘׳—׳™׳¨׳× ׳§׳•׳‘׳¥ MP3</span>
                 <input type="file" id="audioFile" name="file" accept="audio/*,.mp3,.wav,.m4a" required onchange="updateFileName(this)">
             </div>
-            <div class="steprow"><button type="button" class="ghost" style="visibility:hidden">חזור</button><button type="button" onclick="goStep(1)">הבא</button></div>
+            <div class="steprow"><button type="button" class="ghost" style="visibility:hidden">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(1)">׳”׳‘׳</button></div>
             </div>
 
             <div class="stepstage" id="step1">
-            <h2>2. בחירת כלי</h2>
+            <h2>2. ׳‘׳—׳™׳¨׳× ׳›׳׳™</h2>
             <select name="model" id="modelSelect">
-                <optgroup label="הכל">
-                    <option value="all">🎼 כל הכלים (שירה, פסנתר, גיטרה, בס, כלים נוספים, תופים) + אקורדים</option>
+                <optgroup label="׳”׳›׳">
+                    <option value="all">נ¼ ׳›׳ ׳”׳›׳׳™׳ (׳©׳™׳¨׳”, ׳₪׳¡׳ ׳×׳¨, ׳’׳™׳˜׳¨׳”, ׳‘׳¡, ׳›׳׳™׳ ׳ ׳•׳¡׳₪׳™׳, ׳×׳•׳₪׳™׳) + ׳׳§׳•׳¨׳“׳™׳</option>
                 </optgroup>
-                <optgroup label="פסנתר">
-                    <option value="piano">🎹 פסנתר (Demucs + Piano Transcription)</option>
+                <optgroup label="׳₪׳¡׳ ׳×׳¨">
+                    <option value="piano">נ¹ ׳₪׳¡׳ ׳×׳¨ (Demucs + Piano Transcription)</option>
                 </optgroup>
-                <optgroup label="סקסופון (סטם other)">
-                    <option value="sax_alto">🎷 סקסופון אלט</option>
-                    <option value="sax_tenor">🎷 סקסופון טנור</option>
-                    <option value="sax_bari">🎷 סקסופון בריטון</option>
-                    <option value="sax_sop">🎷 סקסופון סופרן</option>
+                <optgroup label="׳¡׳§׳¡׳•׳₪׳•׳ (׳¡׳˜׳ other)">
+                    <option value="sax_alto">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳׳׳˜</option>
+                    <option value="sax_tenor">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳˜׳ ׳•׳¨</option>
+                    <option value="sax_bari">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳‘׳¨׳™׳˜׳•׳</option>
+                    <option value="sax_sop">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳¡׳•׳₪׳¨׳</option>
                 </optgroup>
-                <optgroup label="נחושת ומיתרים (סטם other)">
-                    <option value="brass">🎺 חצוצרה וכלי נשיפה מתכתיים</option>
-                    <option value="violin">🎻 כינור</option>
-                    <option value="cello">🎻 צ'לו</option>
-                    <option value="strings">🎻 מיתרים (אנסמבל)</option>
+                <optgroup label="׳ ׳—׳•׳©׳× ׳•׳׳™׳×׳¨׳™׳ (׳¡׳˜׳ other)">
+                    <option value="brass">נ÷ ׳—׳¦׳•׳¦׳¨׳” ׳•׳›׳׳™ ׳ ׳©׳™׳₪׳” ׳׳×׳›׳×׳™׳™׳</option>
+                    <option value="violin">נ» ׳›׳™׳ ׳•׳¨</option>
+                    <option value="cello">נ» ׳¦'׳׳•</option>
+                    <option value="strings">נ» ׳׳™׳×׳¨׳™׳ (׳׳ ׳¡׳׳‘׳)</option>
                 </optgroup>
-                <optgroup label="בס / גיטרה / שירה">
-                    <option value="bass">🎸 בס (Demucs + Basic Pitch)</option>
-                    <option value="guitar">🎸 גיטרה (Demucs + Basic Pitch)</option>
-                    <option value="vocals">🎤 שירה (Demucs + Basic Pitch)</option>
+                <optgroup label="׳‘׳¡ / ׳’׳™׳˜׳¨׳” / ׳©׳™׳¨׳”">
+                    <option value="bass">נ¸ ׳‘׳¡ (Demucs + Basic Pitch)</option>
+                    <option value="guitar">נ¸ ׳’׳™׳˜׳¨׳” (Demucs + Basic Pitch)</option>
+                    <option value="vocals">נ₪ ׳©׳™׳¨׳” (Demucs + Basic Pitch)</option>
                 </optgroup>
-                <optgroup label="אחר">
-                    <option value="drums">🥁 תופים (בסיסי: קיק / סנייר / האט)</option>
-                    <option value="other">🎼 שאר הכלים (סטם "other")</option>
+                <optgroup label="׳׳—׳¨">
+                    <option value="drums">נ¥ ׳×׳•׳₪׳™׳ (׳‘׳¡׳™׳¡׳™: ׳§׳™׳§ / ׳¡׳ ׳™׳™׳¨ / ׳”׳׳˜)</option>
+                    <option value="other">נ¼ ׳©׳׳¨ ׳”׳›׳׳™׳ (׳¡׳˜׳ "other")</option>
                 </optgroup>
             </select>
-            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">כל בחירה מפעילה קודם הפרדת Demucs אמיתית, ורק אז מתמללת את הכלי המבודד -- לא את כל התערובת.</p>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(0)">חזור</button><button type="button" onclick="goStep(2)">הבא</button></div>
+            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳›׳ ׳‘׳—׳™׳¨׳” ׳׳₪׳¢׳™׳׳” ׳§׳•׳“׳ ׳”׳₪׳¨׳“׳× Demucs ׳׳׳™׳×׳™׳×, ׳•׳¨׳§ ׳׳– ׳׳×׳׳׳׳× ׳׳× ׳”׳›׳׳™ ׳”׳׳‘׳•׳“׳“ -- ׳׳ ׳׳× ׳›׳ ׳”׳×׳¢׳¨׳•׳‘׳×.</p>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(0)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(2)">׳”׳‘׳</button></div>
             </div>
 
             <div class="stepstage" id="step2">
-            <h2>3. קצב וסולם</h2>
+            <h2>3. ׳§׳¦׳‘ ׳•׳¡׳•׳׳</h2>
             <div class="modebar">
-                <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>זיהוי אוטומטי</span></label>
-                <label><input type="radio" name="mode" value="manual" onchange="setMode('manual')"><span>קביעה ידנית</span></label>
-                <label><input type="radio" name="mode" value="anchor" onchange="setMode('anchor')"><span>MIDI בסיס</span></label>
+                <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>׳–׳™׳”׳•׳™ ׳׳•׳˜׳•׳׳˜׳™</span></label>
+                <label><input type="radio" name="mode" value="manual" onchange="setMode('manual')"><span>׳§׳‘׳™׳¢׳” ׳™׳“׳ ׳™׳×</span></label>
+                <label><input type="radio" name="mode" value="anchor" onchange="setMode('anchor')"><span>MIDI ׳‘׳¡׳™׳¡</span></label>
             </div>
 
             <div class="modepane active" id="pane-detect">
-                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">הסולם יזוהה מתוך התווים שתומללו, והקצב (BPM) מתוך האודיו עצמו (librosa.beat_track). לא צריך להעלות שום דבר נוסף.</p>
+                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">׳”׳¡׳•׳׳ ׳™׳–׳•׳”׳” ׳׳×׳•׳ ׳”׳×׳•׳•׳™׳ ׳©׳×׳•׳׳׳׳•, ׳•׳”׳§׳¦׳‘ (BPM) ׳׳×׳•׳ ׳”׳׳•׳“׳™׳• ׳¢׳¦׳׳• (librosa.beat_track). ׳׳ ׳¦׳¨׳™׳ ׳׳”׳¢׳׳•׳× ׳©׳•׳ ׳“׳‘׳¨ ׳ ׳•׳¡׳£.</p>
             </div>
 
             <div class="modepane" id="pane-manual">
                 <div class="row2">
                     <div>
-                        <label class="fieldlabel">סולם</label>
+                        <label class="fieldlabel">׳¡׳•׳׳</label>
                         <select id="keyTonic">
                             <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
                             <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
@@ -805,63 +804,63 @@ HTML_CONTENT = """<!DOCTYPE html>
                         </select>
                     </div>
                     <div>
-                        <label class="fieldlabel">מז'ור/מינור</label>
-                        <select id="keyMode"><option value="major">מז'ור</option><option value="minor">מינור</option></select>
+                        <label class="fieldlabel">׳׳–'׳•׳¨/׳׳™׳ ׳•׳¨</label>
+                        <select id="keyMode"><option value="major">׳׳–'׳•׳¨</option><option value="minor">׳׳™׳ ׳•׳¨</option></select>
                     </div>
                 </div>
-                <label class="fieldlabel">קצב (BPM)</label>
+                <label class="fieldlabel">׳§׳¦׳‘ (BPM)</label>
                 <input type="number" id="manualBpm" value="120" style="width:100%;padding:12px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:white;box-sizing:border-box;">
             </div>
 
             <div class="modepane" id="pane-anchor">
-                <label class="fieldlabel">קובץ MIDI בסיס</label>
+                <label class="fieldlabel">׳§׳•׳‘׳¥ MIDI ׳‘׳¡׳™׳¡</label>
                 <input type="file" id="anchorFile" accept=".mid,.midi" style="display:block;width:100%;color:#94a3b8;font-size:0.85rem;">
-                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">הסולם, מפת הטמפו ומקצב (כולל שינויים באמצע השיר) ייקראו אוטומטית מהקובץ הזה.</p>
+                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳”׳¡׳•׳׳, ׳׳₪׳× ׳”׳˜׳׳₪׳• ׳•׳׳§׳¦׳‘ (׳›׳•׳׳ ׳©׳™׳ ׳•׳™׳™׳ ׳‘׳׳׳¦׳¢ ׳”׳©׳™׳¨) ׳™׳™׳§׳¨׳׳• ׳׳•׳˜׳•׳׳˜׳™׳× ׳׳”׳§׳•׳‘׳¥ ׳”׳–׳”.</p>
             </div>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(1)">חזור</button><button type="button" onclick="goStep(3)">הבא</button></div>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(1)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(3)">׳”׳‘׳</button></div>
             </div>
 
             <div class="stepstage" id="step3">
-            <h2>4. אפשרויות</h2>
+            <h2>4. ׳׳₪׳©׳¨׳•׳™׳•׳×</h2>
             <label id="splitRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:14px;text-align:right">
                 <input type="checkbox" id="splitHands" style="width:auto">
-                פיצול לשתי ידיים (ליד ימין/שמאל, רק לפסנתר)
+                ׳₪׳™׳¦׳•׳ ׳׳©׳×׳™ ׳™׳“׳™׳™׳ (׳׳™׳“ ׳™׳׳™׳/׳©׳׳׳, ׳¨׳§ ׳׳₪׳¡׳ ׳×׳¨)
             </label>
 
             <label id="pedalRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="keepPedal" style="width:auto">
-                שמור פדל סאסטיין כאירועים נפרדים (CC64), בלי למתוח את התווים
+                ׳©׳׳•׳¨ ׳₪׳“׳ ׳¡׳׳¡׳˜׳™׳™׳ ׳›׳׳™׳¨׳•׳¢׳™׳ ׳ ׳₪׳¨׳“׳™׳ (CC64), ׳‘׳׳™ ׳׳׳×׳•׳— ׳׳× ׳”׳×׳•׳•׳™׳
             </label>
 
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="addChords" checked style="width:auto">
-                הוסף סימני אקורדים מעל התווים (lead sheet)
+                ׳”׳•׳¡׳£ ׳¡׳™׳׳ ׳™ ׳׳§׳•׳¨׳“׳™׳ ׳׳¢׳ ׳”׳×׳•׳•׳™׳ (lead sheet)
             </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="writtenPitch" style="width:auto">
-                תווים כתובים לכלי מתועתק (סקסופון / חצוצרה ב-Bb / Eb)
+                ׳×׳•׳•׳™׳ ׳›׳×׳•׳‘׳™׳ ׳׳›׳׳™ ׳׳×׳•׳¢׳×׳§ (׳¡׳§׳¡׳•׳₪׳•׳ / ׳—׳¦׳•׳¦׳¨׳” ׳‘-Bb / Eb)
             </label>
 
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="soloMode" style="width:auto">
-                הקלטה של כלי אחד (למשל פסנתר סולו) – בלי הפרדת Demucs (מדויק יותר, וגם מהיר)
+                ׳”׳§׳׳˜׳” ׳©׳ ׳›׳׳™ ׳׳—׳“ (׳׳׳©׳ ׳₪׳¡׳ ׳×׳¨ ׳¡׳•׳׳•) ג€“ ׳‘׳׳™ ׳”׳₪׳¨׳“׳× Demucs (׳׳“׳•׳™׳§ ׳™׳•׳×׳¨, ׳•׳’׳ ׳׳”׳™׳¨)
             </label>
             <div style="margin-top:10px;text-align:right;font-size:0.85rem;color:#94a3b8">
-                משקל:
+                ׳׳©׳§׳:
                 <select id="forceBeats" style="width:auto;display:inline-block;padding:6px">
-                    <option value="0">אוטומטי</option><option value="2">2 פעימות בתיבה (2/4)</option>
-                    <option value="3">3 פעימות בתיבה (3/4)</option><option value="4">4 פעימות בתיבה (4/4)</option>
-                    <option value="5">5 פעימות בתיבה</option><option value="6">6 פעימות בתיבה</option>
-                    <option value="7">7 פעימות בתיבה</option><option value="9">9 פעימות בתיבה</option>
-                    <option value="11">11 פעימות בתיבה</option><option value="13">13 פעימות בתיבה</option>
+                    <option value="0">׳׳•׳˜׳•׳׳˜׳™</option><option value="2">2 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (2/4)</option>
+                    <option value="3">3 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (3/4)</option><option value="4">4 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (4/4)</option>
+                    <option value="5">5 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="6">6 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
+                    <option value="7">7 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="9">9 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
+                    <option value="11">11 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="13">13 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
                 </select>
             </div>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(2)">חזור</button><button type="button" onclick="goStep(4)">הבא</button></div>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(2)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(4)">׳”׳‘׳</button></div>
             </div>
 
             <div class="stepstage" id="step4">
-            <h2>5. המרה</h2>
-            <button type="submit" id="submitBtn">המר לתווים + MIDI 🚀</button>
+            <h2>5. ׳”׳׳¨׳”</h2>
+            <button type="submit" id="submitBtn">׳”׳׳¨ ׳׳×׳•׳•׳™׳ + MIDI נ€</button>
             <div id="status"></div>
             </div>
         </form>
@@ -914,7 +913,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <script>
         function updateFileName(input) {
             if (input.files.length > 0) {
-                document.getElementById('fileName').innerText = "📄 " + input.files[0].name;
+                document.getElementById('fileName').innerText = "נ“„ " + input.files[0].name;
             }
         }
         let curStep = 0;
@@ -945,12 +944,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             const mode = document.querySelector('input[name="mode"]:checked').value;
             if (mode === 'anchor' && !document.getElementById('anchorFile').files.length) {
                 status.className = "error";
-                status.innerText = "❌ יש לבחור קובץ MIDI בסיס, או לעבור למצב ידני.";
+                status.innerText = "ג ׳™׳© ׳׳‘׳—׳•׳¨ ׳§׳•׳‘׳¥ MIDI ׳‘׳¡׳™׳¡, ׳׳• ׳׳¢׳‘׳•׳¨ ׳׳׳¦׳‘ ׳™׳“׳ ׳™.";
                 return;
             }
 
             status.className = "loading";
-            status.innerText = "⏳ מפריד כלים ומתמלל... זה יכול לקחת כמה דקות, אל תסגור את הדף";
+            status.innerText = "ג³ ׳׳₪׳¨׳™׳“ ׳›׳׳™׳ ׳•׳׳×׳׳׳... ׳–׳” ׳™׳›׳•׳ ׳׳§׳—׳× ׳›׳׳” ׳“׳§׳•׳×, ׳׳ ׳×׳¡׳’׳•׳¨ ׳׳× ׳”׳“׳£";
             btn.disabled = true;
             btn.style.opacity = "0.5";
 
@@ -995,28 +994,28 @@ HTML_CONTENT = """<!DOCTYPE html>
                         fails = 0;
                     } catch (e) {
                         fails++;
-                        if (fails >= 8) throw new Error('החיבור לשרת נפל (השרת או המנהרה כבו). הרץ שוב את תא ההפעלה ב-Colab.');
+                        if (fails >= 8) throw new Error('׳”׳—׳™׳‘׳•׳¨ ׳׳©׳¨׳× ׳ ׳₪׳ (׳”׳©׳¨׳× ׳׳• ׳”׳׳ ׳”׳¨׳” ׳›׳‘׳•). ׳”׳¨׳¥ ׳©׳•׳‘ ׳׳× ׳×׳ ׳”׳”׳₪׳¢׳׳” ׳‘-Colab.');
                         continue;
                     }
-                    if (r.status === 404) throw new Error('המשימה נעלמה -- השרת הופעל מחדש באמצע. נסה שוב.');
-                    if (!r.ok) throw new Error('בדיקת הסטטוס נכשלה (HTTP ' + r.status + ')');
+                    if (r.status === 404) throw new Error('׳”׳׳©׳™׳׳” ׳ ׳¢׳׳׳” -- ׳”׳©׳¨׳× ׳”׳•׳₪׳¢׳ ׳׳—׳“׳© ׳‘׳׳׳¦׳¢. ׳ ׳¡׳” ׳©׳•׳‘.');
+                    if (!r.ok) throw new Error('׳‘׳“׳™׳§׳× ׳”׳¡׳˜׳˜׳•׳¡ ׳ ׳›׳©׳׳” (HTTP ' + r.status + ')');
                     info = await r.json();
-                    if (info.status === 'error') throw new Error(info.error || 'העיבוד נכשל');
+                    if (info.status === 'error') throw new Error(info.error || '׳”׳¢׳™׳‘׳•׳“ ׳ ׳›׳©׳');
                     status.className = "loading";
-                    status.innerText = '⏳ ' + (info.stage || 'מעבד...');
+                    status.innerText = 'ג³ ' + (info.stage || '׳׳¢׳‘׳“...');
                     if (info.status === 'done') break;
                 }
 
                 // 3) download buttons (MIDI / MusicXML for MuseScore / PDF when available)
-                const labels = {midi_raw: '⬇ MIDI ביצוע מקורי (מומלץ ל-DAW)', midi: '⬇ MIDI מקוונטז (תואם לתווים)', xml: '⬇ MusicXML (MuseScore)', pdf: '⬇ PDF'};
+                const labels = {midi_raw: 'ג¬‡ MIDI ׳‘׳™׳¦׳•׳¢ ׳׳§׳•׳¨׳™ (׳׳•׳׳׳¥ ׳-DAW)', midi: 'ג¬‡ MIDI ׳׳§׳•׳•׳ ׳˜׳– (׳×׳•׳׳ ׳׳×׳•׳•׳™׳)', xml: 'ג¬‡ MusicXML (MuseScore)', pdf: 'ג¬‡ PDF'};
                 const base = (document.getElementById('audioFile').files[0].name || 'transcribed').replace(/\\.[^.]+$/, '');
                 const extOf = {midi_raw: '_performance.mid', midi: '_quantized.mid', xml: '.musicxml', pdf: '.pdf'};
                 status.className = info.used_fallback ? "loading" : "success";
-                let msg = info.used_fallback ? "⚠️ מודל הפסנתר הייעודי לא היה זמין -- נעשה שימוש ב-Basic Pitch.<br>" : "✅ ההמרה הושלמה!<br>";
-                msg += (info.n_bars || 0) + ' תיבות | משקל: ' + (info.meter || []).join(', ') + ' | טמפו: ' + (info.tempo || []).join(', ') + ' | אקורדים: ' + (info.n_chords || 0);
-                if (info.beat_engine) msg += ' | פעימות: ' + info.beat_engine;
-                if (info.dtw_used === true) msg += ' | יושר ל-MIDI הבסיס (DTW)';
-                else if (info.dtw_used === false) msg += ' | יישור DTW נכשל';
+                let msg = info.used_fallback ? "ג ן¸ ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳”׳™׳™׳¢׳•׳“׳™ ׳׳ ׳”׳™׳” ׳–׳׳™׳ -- ׳ ׳¢׳©׳” ׳©׳™׳׳•׳© ׳‘-Basic Pitch.<br>" : "ג… ׳”׳”׳׳¨׳” ׳”׳•׳©׳׳׳”!<br>";
+                msg += (info.n_bars || 0) + ' ׳×׳™׳‘׳•׳× | ׳׳©׳§׳: ' + (info.meter || []).join(', ') + ' | ׳˜׳׳₪׳•: ' + (info.tempo || []).join(', ') + ' | ׳׳§׳•׳¨׳“׳™׳: ' + (info.n_chords || 0);
+                if (info.beat_engine) msg += ' | ׳₪׳¢׳™׳׳•׳×: ' + info.beat_engine;
+                if (info.dtw_used === true) msg += ' | ׳™׳•׳©׳¨ ׳-MIDI ׳”׳‘׳¡׳™׳¡ (DTW)';
+                else if (info.dtw_used === false) msg += ' | ׳™׳™׳©׳•׳¨ DTW ׳ ׳›׳©׳';
                 status.innerHTML = msg + '<br>';
                 for (const f of (info.formats || [])) {
                     const a = document.createElement('a');
@@ -1028,7 +1027,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
             } catch (err) {
                 status.className = "error";
-                status.innerText = "❌ שגיאה: " + (err && err.message ? err.message : err);
+                status.innerText = "ג ׳©׳’׳™׳׳”: " + (err && err.message ? err.message : err);
             } finally {
                 btn.disabled = false;
                 btn.style.opacity = "1";
@@ -1073,7 +1072,7 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
                 f.write(MUSCRIPTOR_MODEL.transcribe_to_midi(stem_wav))
             ms_ok = os.path.exists(out_mid) and os.path.getsize(out_mid) > 0
         except Exception:
-            print(f"⚠️ MuScriptor נכשל על הסטם הזה ({model}) -- עובר לשרשרת הקודמת")
+            print(f"ג ן¸ MuScriptor ׳ ׳›׳©׳ ׳¢׳ ׳”׳¡׳˜׳ ׳”׳–׳” ({model}) -- ׳¢׳•׳‘׳¨ ׳׳©׳¨׳©׳¨׳× ׳”׳§׳•׳“׳׳×")
             traceback.print_exc()
             ms_ok = False
     tk_ok = False
@@ -1096,10 +1095,10 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
     else:
         used_fallback = (model == "piano")
         if used_fallback:
-            print("⚠️ מודל הפסנתר לא זמין -- עובר ל-Basic Pitch על הסטם המבודד")
+            print("ג ן¸ ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳׳ ׳–׳׳™׳ -- ׳¢׳•׳‘׳¨ ׳-Basic Pitch ׳¢׳ ׳”׳¡׳˜׳ ׳”׳׳‘׳•׳“׳“")
         basic_pitch_to_midi(stem_wav, out_mid, model)
     if not os.path.exists(out_mid):
-        raise HTTPException(status_code=500, detail="קובץ ה-MIDI לא נוצר")
+        raise HTTPException(status_code=500, detail="׳§׳•׳‘׳¥ ׳”-MIDI ׳׳ ׳ ׳•׳¦׳¨")
     parsed = read_midi_notes_and_map(out_mid)
     if model == "piano" and not used_fallback:
         pedal = parsed["pedal"]
@@ -1123,27 +1122,27 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
     mix_wav = f"uploads/{job_id}_mix.wav"
     orig_stem = os.path.splitext(orig_filename or "transcribed")[0] or "transcribed"
     try:
-        _set(job_id, status="queued", stage="ממתין לתורו...")
+        _set(job_id, status="queued", stage="׳׳׳×׳™׳ ׳׳×׳•׳¨׳•...")
         with JOB_LOCK:
-            _set(job_id, status="running", stage="מפריד כלים עם Demucs (השלב הארוך, בפעם הראשונה גם יורד מודל)...")
+            _set(job_id, status="running", stage="׳׳₪׳¨׳™׳“ ׳›׳׳™׳ ׳¢׳ Demucs (׳”׳©׳׳‘ ׳”׳׳¨׳•׳, ׳‘׳₪׳¢׳ ׳”׳¨׳׳©׳•׳ ׳” ׳’׳ ׳™׳•׳¨׳“ ׳׳•׳“׳)...")
             solo = bool(solo) and model != "all"
             base = os.path.splitext(os.path.basename(raw_path))[0]
             stem_dir = os.path.join(sep_dir, "htdemucs_6s", base)
             if not solo:
                 r = subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True, text=True)
                 if r.returncode != 0:
-                    raise HTTPException(status_code=500, detail=f"הפרדת Demucs נכשלה: {r.stderr[-1500:]}")
+                    raise HTTPException(status_code=500, detail=f"׳”׳₪׳¨׳“׳× Demucs ׳ ׳›׳©׳׳”: {r.stderr[-1500:]}")
             conv = subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "44100", "-ac", "1", mix_wav], capture_output=True, text=True)
             if conv.returncode != 0:
-                raise HTTPException(status_code=500, detail="המרת המיקס נכשלה")
+                raise HTTPException(status_code=500, detail="׳”׳׳¨׳× ׳”׳׳™׳§׳¡ ׳ ׳›׳©׳׳”")
 
             kinds = ALL_PARTS if model == "all" else [model]
             parts, used_fallback, pedal_events = [], False, None
             for k_i, kind in enumerate(kinds):
                 src_stem = raw_path if solo else os.path.join(stem_dir, INSTR[kind]["stem"] + ".wav")
                 if not os.path.exists(src_stem):
-                    raise HTTPException(status_code=500, detail=f"הסטם '{INSTR[kind]['stem']}' לא נמצא אחרי ההפרדה")
-                _set(job_id, stage=f"מתמלל {kind} ({k_i + 1}/{len(kinds)})...")
+                    raise HTTPException(status_code=500, detail=f"׳”׳¡׳˜׳ '{INSTR[kind]['stem']}' ׳׳ ׳ ׳׳¦׳ ׳׳—׳¨׳™ ׳”׳”׳₪׳¨׳“׳”")
+                _set(job_id, stage=f"׳׳×׳׳׳ {kind} ({k_i + 1}/{len(kinds)})...")
                 stem_wav = f"uploads/{job_id}_{kind}_stem.wav"
                 subprocess.run(["ffmpeg", "-y", "-i", src_stem, "-ar", "32000", "-ac", "1", stem_wav], capture_output=True, text=True)
                 notes, pedal, fb = _stem_notes(kind, stem_wav, f"outputs/{job_id}_{kind}", job_id)
@@ -1151,18 +1150,18 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                 if notes:
                     parts.append(dict(kind=kind, notes=notes, pedal=pedal, stem_wav=stem_wav))
             if not parts:
-                raise HTTPException(status_code=500, detail="לא נותרו תווים אחרי סינון רעשים -- נסה קובץ אחר")
+                raise HTTPException(status_code=500, detail="׳׳ ׳ ׳•׳×׳¨׳• ׳×׳•׳•׳™׳ ׳׳—׳¨׳™ ׳¡׳™׳ ׳•׳ ׳¨׳¢׳©׳™׳ -- ׳ ׳¡׳” ׳§׳•׳‘׳¥ ׳׳—׳¨")
             for p in parts:                                   # performance-timing copy (for the raw MIDI)
                 p["orig"] = list(p["notes"])
                 p["orig_pedal"] = [e for a_, b_ in p["pedal"] for e in ((a_, 127), (b_, 0))]
 
-            _set(job_id, stage="מזהה פעימות, משקל וטמפו...")
+            _set(job_id, stage="׳׳–׳”׳” ׳₪׳¢׳™׳׳•׳×, ׳׳©׳§׳ ׳•׳˜׳׳₪׳•...")
             dtw_used, key_notes, to_ref, beat_engine = None, None, None, None
             all_t = [n[1] for p in parts for n in p["notes"]]
             all_e = [n[2] for p in parts for n in p["notes"]]
             if mode == "anchor":
                 if not anchor_path:
-                    raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+                    raise HTTPException(status_code=400, detail="׳׳¦׳‘ 'MIDI ׳‘׳¡׳™׳¡' ׳“׳•׳¨׳© ׳׳”׳¢׳׳•׳× ׳§׳•׳‘׳¥ MIDI")
                 anchor = read_midi_notes_and_map(anchor_path)
                 tempo_map, timesig_map = anchor["tempo_map"], anchor["timesig_map"]
                 anchor_notes = [(p, s, e) for p, s, e, v in anchor["notes"]]
@@ -1189,14 +1188,14 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                         tl = nt.timeline_from_beats(beats, downs, min(all_t), max(all_e), all_t, int(force_beats or 0))
                     except Exception:
                         traceback.print_exc()
-                        print("⚠️ זיהוי פעימות נכשל -- עובר לטמפו קבוע")
+                        print("ג ן¸ ׳–׳™׳”׳•׳™ ׳₪׳¢׳™׳׳•׳× ׳ ׳›׳©׳ -- ׳¢׳•׳‘׳¨ ׳׳˜׳׳₪׳• ׳§׳‘׳•׳¢")
                 if tl is None:
                     bpm = float(manual_bpm) if mode == "manual" else detect_bpm_from_audio(mix_wav)
                     step = 60.0 / bpm
                     beats = np.arange(0.0, max(all_e) + 4 * step, step)
                     tl = nt.timeline_from_beats(beats, beats[::int(force_beats or 4)], min(all_t), max(all_e), all_t, int(force_beats or 0))
 
-            _set(job_id, stage="מצמיד לסולמות, מיישר ומקוונטז...")
+            _set(job_id, stage="׳׳¦׳׳™׳“ ׳׳¡׳•׳׳׳•׳×, ׳׳™׳™׳©׳¨ ׳•׳׳§׳•׳•׳ ׳˜׳–...")
             key_override = None
             if mode == "manual":
                 tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
@@ -1219,7 +1218,7 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
 
             chords = []
             if add_chords:
-                _set(job_id, stage="מזהה אקורדים...")
+                _set(job_id, stage="׳׳–׳”׳” ׳׳§׳•׳¨׳“׳™׳...")
                 try:
                     tl_audio = tl
                     if to_ref is not None:                     # anchor mode: score time -> performance time
@@ -1229,9 +1228,9 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                     chords = nt.detect_chords(mix_wav, bass_wav, tl_audio)
                 except Exception:
                     traceback.print_exc()
-                    print("⚠️ זיהוי אקורדים נכשל -- ממשיך בלי אקורדים")
+                    print("ג ן¸ ׳–׳™׳”׳•׳™ ׳׳§׳•׳¨׳“׳™׳ ׳ ׳›׳©׳ -- ׳׳׳©׳™׳ ׳‘׳׳™ ׳׳§׳•׳¨׳“׳™׳")
 
-            _set(job_id, stage="בונה תווים (MusicXML) ו-MIDI...")
+            _set(job_id, stage="׳‘׳•׳ ׳” ׳×׳•׳•׳™׳ (MusicXML) ׳•-MIDI...")
             raw_parts = []
             for p in parts:
                 rn = p["orig"] if p["kind"] == "drums" else smooth_velocities(
@@ -1256,13 +1255,13 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                         files["pdf"] = pdf
                 except Exception:
                     traceback.print_exc()
-            _set(job_id, status="done", stage="הושלם", files=files, download_name=orig_stem,
+            _set(job_id, status="done", stage="׳”׳•׳©׳׳", files=files, download_name=orig_stem,
                  used_fallback=used_fallback, dtw_used=dtw_used, beat_engine=beat_engine,
                  n_bars=len(tl.bars), n_chords=len(chords),
                  meter=sorted({f"{b['num']}/{b['den']}" for b in tl.bars}),
                  tempo=[round(b) for _, b in tl.tempos][:6])
     except HTTPException as e:
-        print(f"❌ משימה {job_id} נכשלה: {e.detail}")
+        print(f"ג ׳׳©׳™׳׳” {job_id} ׳ ׳›׳©׳׳”: {e.detail}")
         _set(job_id, status="error", error=str(e.detail))
     except Exception as err:
         traceback.print_exc()
@@ -1291,7 +1290,7 @@ async def transcribe(
 ):
     """Saves the uploads, starts the pipeline in the background and answers immediately."""
     if model not in INSTR and model != "all":
-        raise HTTPException(status_code=400, detail=f"כלי לא מוכר: {model}")
+        raise HTTPException(status_code=400, detail=f"׳›׳׳™ ׳׳ ׳׳•׳›׳¨: {model}")
     job_id = uuid.uuid4().hex[:8]
     src_ext = os.path.splitext(file.filename or "")[1] or ".mp3"
     raw_path = f"uploads/{job_id}_raw{src_ext}"
@@ -1300,11 +1299,11 @@ async def transcribe(
     anchor_path = None
     if mode == "anchor":
         if anchor_midi is None:
-            raise HTTPException(status_code=400, detail="מצב 'MIDI בסיס' דורש להעלות קובץ MIDI")
+            raise HTTPException(status_code=400, detail="׳׳¦׳‘ 'MIDI ׳‘׳¡׳™׳¡' ׳“׳•׳¨׳© ׳׳”׳¢׳׳•׳× ׳§׳•׳‘׳¥ MIDI")
         anchor_path = f"uploads/{job_id}_anchor.mid"
         with open(anchor_path, "wb") as f:
             f.write(await anchor_midi.read())
-    JOBS[job_id] = {"status": "queued", "stage": "התקבל", "error": None}
+    JOBS[job_id] = {"status": "queued", "stage": "׳”׳×׳§׳‘׳", "error": None}
     threading.Thread(
         target=_process_job,
         args=(job_id, raw_path, anchor_path, file.filename, model, mode,
@@ -1318,7 +1317,7 @@ async def transcribe(
 def job_status(job_id: str):
     job = JOBS.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="המשימה לא נמצאה (ייתכן שהשרת הופעל מחדש)")
+        raise HTTPException(status_code=404, detail="׳”׳׳©׳™׳׳” ׳׳ ׳ ׳׳¦׳׳” (׳™׳™׳×׳›׳ ׳©׳”׳©׳¨׳× ׳”׳•׳₪׳¢׳ ׳׳—׳“׳©)")
     out = {k: job.get(k) for k in ("status", "stage", "error", "download_name", "used_fallback", "dtw_used", "beat_engine", "n_bars", "n_chords", "meter", "tempo")}
     out["formats"] = list((job.get("files") or {}).keys())
     return out
@@ -1328,10 +1327,10 @@ def job_status(job_id: str):
 def job_download(job_id: str, fmt: str = "midi"):
     job = JOBS.get(job_id)
     if job is None or job.get("status") != "done":
-        raise HTTPException(status_code=404, detail="הקובץ עדיין לא מוכן או שהמשימה לא נמצאה")
+        raise HTTPException(status_code=404, detail="׳”׳§׳•׳‘׳¥ ׳¢׳“׳™׳™׳ ׳׳ ׳׳•׳›׳ ׳׳• ׳©׳”׳׳©׳™׳׳” ׳׳ ׳ ׳׳¦׳׳”")
     path = (job.get("files") or {}).get(fmt)
     if not path:
-        raise HTTPException(status_code=404, detail=f"הפורמט {fmt} לא זמין")
+        raise HTTPException(status_code=404, detail=f"׳”׳₪׳•׳¨׳׳˜ {fmt} ׳׳ ׳–׳׳™׳")
     ext = {"midi_raw": "_performance.mid", "midi": "_quantized.mid", "xml": ".musicxml", "pdf": ".pdf"}[fmt]
     mt = {"midi_raw": "audio/midi", "midi": "audio/midi", "xml": "application/vnd.recordare.musicxml+xml", "pdf": "application/pdf"}[fmt]
     name = job["download_name"] + ext
