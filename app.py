@@ -248,7 +248,6 @@ def build_perf_to_ref(anchor_notes4, perf_wav_path):
     performance time (sec) onto the anchor's timeline, so transcribed notes can wear the
     anchor's exact tempo map / time signatures. Raises on failure (caller falls back)."""
     import numpy as np
-import uvicorn
     import librosa
     chroma_perf, hop, sr = _audio_chroma(perf_wav_path)
     ref_dur = max((e for _, _, e, *_ in anchor_notes4), default=1.0)
@@ -289,7 +288,6 @@ def _timesig_for_segment(y_seg, sr):
     meter, and is NOT reliable for irregular/mixed meters (7/8, 13/8, etc.):
     no simple algorithm (this one included) detects those with real confidence."""
     import numpy as np
-import uvicorn
     import librosa
     onset_env = librosa.onset.onset_strength(y=y_seg, sr=sr)
     _, beat_frames = librosa.beat.beat_track(y=y_seg, sr=sr, onset_envelope=onset_env)
@@ -336,7 +334,6 @@ def detect_time_signature_map(wav_path, window_sec=20.0):
 def detect_bpm_from_audio(wav_path):
     """Audio-only tempo estimate, for the 'auto-detect' mode when no anchor MIDI is given."""
     import numpy as np
-import uvicorn
     import librosa
     y, sr = librosa.load(wav_path, sr=None)
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
@@ -620,28 +617,28 @@ os.makedirs("uploads", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"ג¡ ׳׳₪׳¢׳™׳ ׳”׳×׳§׳ ׳¢׳™׳‘׳•׳“: {DEVICE}")
+print(f"׳’ֲֲ¡ ׳³ֲ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ ׳³ג€׳³ֳ—׳³ֲ§׳³ֲ ׳³ֲ¢׳³ג„¢׳³ג€˜׳³ג€¢׳³ג€: {DEVICE}")
 
 PIANO_MODEL = None
 try:
     from piano_transcription_inference import PianoTranscription
-    print("ג³ ׳˜׳•׳¢׳ ׳׳× ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳-GPU ׳׳¨׳׳©...")
+    print("׳’ֲֲ³ ׳³ֻ׳³ג€¢׳³ֲ¢׳³ֲ ׳³ֲ׳³ֳ— ׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ ׳³ֲ-GPU ׳³ֲ׳³ֲ¨׳³ֲ׳³ֲ©...")
     PIANO_MODEL = PianoTranscription(device=DEVICE)
-    print("ג… ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳ ׳˜׳¢׳ ׳‘׳”׳¦׳׳—׳”!")
+    print("׳’ֲג€¦ ׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ ׳³ֲ ׳³ֻ׳³ֲ¢׳³ֲ ׳³ג€˜׳³ג€׳³ֲ¦׳³ֲ׳³ג€”׳³ג€!")
 except Exception:
     import traceback
-    print("ג ן¸ ׳©׳’׳™׳׳” ׳‘׳˜׳¢׳™׳ ׳× ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ -- ׳”׳׳•׳“׳ ׳”׳›׳׳׳™ (Basic Pitch) ׳™׳©׳׳© ׳›׳’׳™׳‘׳•׳™ ׳׳•׳˜׳•׳׳˜׳™:")
+    print("׳’ֲֲ ׳ֲ¸ֲ ׳³ֲ©׳³ג€™׳³ג„¢׳³ֲ׳³ג€ ׳³ג€˜׳³ֻ׳³ֲ¢׳³ג„¢׳³ֲ ׳³ֳ— ׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ -- ׳³ג€׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג€÷׳³ֲ׳³ֲ׳³ג„¢ (Basic Pitch) ׳³ג„¢׳³ֲ©׳³ֲ׳³ֲ© ׳³ג€÷׳³ג€™׳³ג„¢׳³ג€˜׳³ג€¢׳³ג„¢ ׳³ֲ׳³ג€¢׳³ֻ׳³ג€¢׳³ֲ׳³ֻ׳³ג„¢:")
     traceback.print_exc()  # full traceback, not just str(e) -- needed to actually diagnose this
 
 MUSCRIPTOR_MODEL = None
 try:
     from muscriptor import TranscriptionModel
-    print("ג³ ׳˜׳•׳¢׳ ׳׳× MuScriptor (׳׳•׳“׳ ׳×׳׳׳•׳ ׳›׳׳׳™ ׳׳›׳ ׳”׳›׳׳™׳) ׳׳¨׳׳©...")
+    print("׳’ֲֲ³ ׳³ֻ׳³ג€¢׳³ֲ¢׳³ֲ ׳³ֲ׳³ֳ— MuScriptor (׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ֳ—׳³ֲ׳³ֲ׳³ג€¢׳³ֲ ׳³ג€÷׳³ֲ׳³ֲ׳³ג„¢ ׳³ֲ׳³ג€÷׳³ֲ ׳³ג€׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ) ׳³ֲ׳³ֲ¨׳³ֲ׳³ֲ©...")
     MUSCRIPTOR_MODEL = TranscriptionModel.load_model("medium")
-    print("ג… MuScriptor ׳ ׳˜׳¢׳ ׳‘׳”׳¦׳׳—׳”!")
+    print("׳’ֲג€¦ MuScriptor ׳³ֲ ׳³ֻ׳³ֲ¢׳³ֲ ׳³ג€˜׳³ג€׳³ֲ¦׳³ֲ׳³ג€”׳³ג€!")
 except Exception:
     import traceback as _tb                              # local import: safe even if PIANO_MODEL loaded fine above
-    print("ג ן¸ MuScriptor ׳׳ ׳–׳׳™׳ (׳׳ ׳׳•׳×׳§׳ ׳׳• ׳ ׳›׳©׳ ׳‘׳˜׳¢׳™׳ ׳”) -- ׳׳׳©׳™׳ ׳¢׳ ׳”׳©׳¨׳©׳¨׳× ׳”׳§׳™׳™׳׳×:")
+    print("׳’ֲֲ ׳ֲ¸ֲ MuScriptor ׳³ֲ׳³ֲ ׳³ג€“׳³ֲ׳³ג„¢׳³ֲ (׳³ֲ׳³ֲ ׳³ֲ׳³ג€¢׳³ֳ—׳³ֲ§׳³ֲ ׳³ֲ׳³ג€¢ ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ ׳³ג€˜׳³ֻ׳³ֲ¢׳³ג„¢׳³ֲ ׳³ג€) -- ׳³ֲ׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ ׳³ֲ¢׳³ֲ ׳³ג€׳³ֲ©׳³ֲ¨׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ג€׳³ֲ§׳³ג„¢׳³ג„¢׳³ֲ׳³ֳ—:")
     _tb.print_exc()
 
 BP_PREDICT, BP_MODEL = None, None
@@ -661,7 +658,7 @@ def basic_pitch_to_midi(wav_path, out_midi, model_key):
     """FIX: uses predict() with the model passed explicitly (no predict_and_save), tuned per instrument."""
     import librosa
     if BP_PREDICT is None:
-        raise RuntimeError("Basic Pitch ׳׳ ׳׳•׳×׳§׳")
+        raise RuntimeError("Basic Pitch ׳³ֲ׳³ֲ ׳³ֲ׳³ג€¢׳³ֳ—׳³ֲ§׳³ֲ")
     cfg = INSTR.get(model_key, INSTR["other"])
     kw = dict(onset_threshold=0.6 if cfg["mono"] else 0.5,
               frame_threshold=0.35 if cfg["mono"] else 0.3,
@@ -680,7 +677,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>׳׳׳™׳¨ ׳©׳׳¢ ׳׳×׳•׳•׳™׳ ׳•׳-MIDI</title>
+    <title>׳³ֲ׳³ֲ׳³ג„¢׳³ֲ¨ ׳³ֲ©׳³ֲ׳³ֲ¢ ׳³ֲ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ-MIDI</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #15130f; color: #ede6d6; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
         #bgCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
@@ -726,8 +723,8 @@ HTML_CONTENT = """<!DOCTYPE html>
 <body>
     <canvas id="bgCanvas"></canvas>
     <div class="card">
-        <h1>נ¹ ׳׳׳™׳¨ ׳©׳׳¢ ׳׳×׳•׳•׳™׳ ׳•׳-MIDI</h1>
-        <p>׳׳©׳׳‘ ׳׳©׳׳‘: ׳§׳•׳‘׳¥ &rarr; ׳›׳׳™ &rarr; ׳§׳¦׳‘ ׳•׳¡׳•׳׳ &rarr; ׳׳₪׳©׳¨׳•׳™׳•׳× &rarr; ׳”׳׳¨׳”</p>
+        <h1>׳ ֲֲֲ¹ ׳³ֲ׳³ֲ׳³ג„¢׳³ֲ¨ ׳³ֲ©׳³ֲ׳³ֲ¢ ׳³ֲ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ-MIDI</h1>
+        <p>׳³ֲ׳³ֲ©׳³ֲ׳³ג€˜ ׳³ֲ׳³ֲ©׳³ֲ׳³ג€˜: ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ &rarr; ׳³ג€÷׳³ֲ׳³ג„¢ &rarr; ׳³ֲ§׳³ֲ¦׳³ג€˜ ׳³ג€¢׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ &rarr; ׳³ֲ׳³ג‚×׳³ֲ©׳³ֲ¨׳³ג€¢׳³ג„¢׳³ג€¢׳³ֳ— &rarr; ׳³ג€׳³ֲ׳³ֲ¨׳³ג€</p>
         <div class="stepper" id="stepper">
             <div class="pt active" data-i="0"><div class="dot"></div></div><div class="seg"></div>
             <div class="pt" data-i="1"><div class="dot"></div></div><div class="seg"></div>
@@ -737,65 +734,65 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
         <form id="transcribeForm">
             <div class="stepstage active" id="step0">
-            <h2>1. ׳§׳•׳‘׳¥ ׳”׳©׳׳¢</h2>
+            <h2>1. ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ ׳³ג€׳³ֲ©׳³ֲ׳³ֲ¢</h2>
             <div class="upload-box" onclick="document.getElementById('audioFile').click()">
-                <span id="fileName">נ“ ׳׳—׳¥ ׳›׳׳ ׳׳‘׳—׳™׳¨׳× ׳§׳•׳‘׳¥ MP3</span>
+                <span id="fileName">׳ ֲג€ֲ ׳³ֲ׳³ג€”׳³ֲ¥ ׳³ג€÷׳³ֲ׳³ֲ ׳³ֲ׳³ג€˜׳³ג€”׳³ג„¢׳³ֲ¨׳³ֳ— ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ MP3</span>
                 <input type="file" id="audioFile" name="file" accept="audio/*,.mp3,.wav,.m4a" required onchange="updateFileName(this)">
             </div>
-            <div class="steprow"><button type="button" class="ghost" style="visibility:hidden">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(1)">׳”׳‘׳</button></div>
+            <div class="steprow"><button type="button" class="ghost" style="visibility:hidden">׳³ג€”׳³ג€“׳³ג€¢׳³ֲ¨</button><button type="button" onclick="goStep(1)">׳³ג€׳³ג€˜׳³ֲ</button></div>
             </div>
 
             <div class="stepstage" id="step1">
-            <h2>2. ׳‘׳—׳™׳¨׳× ׳›׳׳™</h2>
+            <h2>2. ׳³ג€˜׳³ג€”׳³ג„¢׳³ֲ¨׳³ֳ— ׳³ג€÷׳³ֲ׳³ג„¢</h2>
             <select name="model" id="modelSelect">
-                <optgroup label="׳”׳›׳">
-                    <option value="all">נ¼ ׳›׳ ׳”׳›׳׳™׳ (׳©׳™׳¨׳”, ׳₪׳¡׳ ׳×׳¨, ׳’׳™׳˜׳¨׳”, ׳‘׳¡, ׳›׳׳™׳ ׳ ׳•׳¡׳₪׳™׳, ׳×׳•׳₪׳™׳) + ׳׳§׳•׳¨׳“׳™׳</option>
+                <optgroup label="׳³ג€׳³ג€÷׳³ֲ">
+                    <option value="all">׳ ֲֲֲ¼ ׳³ג€÷׳³ֲ ׳³ג€׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ (׳³ֲ©׳³ג„¢׳³ֲ¨׳³ג€, ׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨, ׳³ג€™׳³ג„¢׳³ֻ׳³ֲ¨׳³ג€, ׳³ג€˜׳³ֲ¡, ׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ ׳³ֲ ׳³ג€¢׳³ֲ¡׳³ג‚×׳³ג„¢׳³ֲ, ׳³ֳ—׳³ג€¢׳³ג‚×׳³ג„¢׳³ֲ) + ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ</option>
                 </optgroup>
-                <optgroup label="׳₪׳¡׳ ׳×׳¨">
-                    <option value="piano">נ¹ ׳₪׳¡׳ ׳×׳¨ (Demucs + Piano Transcription)</option>
+                <optgroup label="׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨">
+                    <option value="piano">׳ ֲֲֲ¹ ׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ (Demucs + Piano Transcription)</option>
                 </optgroup>
-                <optgroup label="׳¡׳§׳¡׳•׳₪׳•׳ (׳¡׳˜׳ other)">
-                    <option value="sax_alto">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳׳׳˜</option>
-                    <option value="sax_tenor">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳˜׳ ׳•׳¨</option>
-                    <option value="sax_bari">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳‘׳¨׳™׳˜׳•׳</option>
-                    <option value="sax_sop">נ· ׳¡׳§׳¡׳•׳₪׳•׳ ׳¡׳•׳₪׳¨׳</option>
+                <optgroup label="׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ (׳³ֲ¡׳³ֻ׳³ֲ other)">
+                    <option value="sax_alto">׳ ֲֲֲ· ׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ ׳³ֲ׳³ֲ׳³ֻ</option>
+                    <option value="sax_tenor">׳ ֲֲֲ· ׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ ׳³ֻ׳³ֲ ׳³ג€¢׳³ֲ¨</option>
+                    <option value="sax_bari">׳ ֲֲֲ· ׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ ׳³ג€˜׳³ֲ¨׳³ג„¢׳³ֻ׳³ג€¢׳³ֲ</option>
+                    <option value="sax_sop">׳ ֲֲֲ· ׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ ׳³ֲ¡׳³ג€¢׳³ג‚×׳³ֲ¨׳³ֲ</option>
                 </optgroup>
-                <optgroup label="׳ ׳—׳•׳©׳× ׳•׳׳™׳×׳¨׳™׳ (׳¡׳˜׳ other)">
-                    <option value="brass">נ÷ ׳—׳¦׳•׳¦׳¨׳” ׳•׳›׳׳™ ׳ ׳©׳™׳₪׳” ׳׳×׳›׳×׳™׳™׳</option>
-                    <option value="violin">נ» ׳›׳™׳ ׳•׳¨</option>
-                    <option value="cello">נ» ׳¦'׳׳•</option>
-                    <option value="strings">נ» ׳׳™׳×׳¨׳™׳ (׳׳ ׳¡׳׳‘׳)</option>
+                <optgroup label="׳³ֲ ׳³ג€”׳³ג€¢׳³ֲ©׳³ֳ— ׳³ג€¢׳³ֲ׳³ג„¢׳³ֳ—׳³ֲ¨׳³ג„¢׳³ֲ (׳³ֲ¡׳³ֻ׳³ֲ other)">
+                    <option value="brass">׳ ֲֲֳ· ׳³ג€”׳³ֲ¦׳³ג€¢׳³ֲ¦׳³ֲ¨׳³ג€ ׳³ג€¢׳³ג€÷׳³ֲ׳³ג„¢ ׳³ֲ ׳³ֲ©׳³ג„¢׳³ג‚×׳³ג€ ׳³ֲ׳³ֳ—׳³ג€÷׳³ֳ—׳³ג„¢׳³ג„¢׳³ֲ</option>
+                    <option value="violin">׳ ֲֲֲ» ׳³ג€÷׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ¨</option>
+                    <option value="cello">׳ ֲֲֲ» ׳³ֲ¦'׳³ֲ׳³ג€¢</option>
+                    <option value="strings">׳ ֲֲֲ» ׳³ֲ׳³ג„¢׳³ֳ—׳³ֲ¨׳³ג„¢׳³ֲ (׳³ֲ׳³ֲ ׳³ֲ¡׳³ֲ׳³ג€˜׳³ֲ)</option>
                 </optgroup>
-                <optgroup label="׳‘׳¡ / ׳’׳™׳˜׳¨׳” / ׳©׳™׳¨׳”">
-                    <option value="bass">נ¸ ׳‘׳¡ (Demucs + Basic Pitch)</option>
-                    <option value="guitar">נ¸ ׳’׳™׳˜׳¨׳” (Demucs + Basic Pitch)</option>
-                    <option value="vocals">נ₪ ׳©׳™׳¨׳” (Demucs + Basic Pitch)</option>
+                <optgroup label="׳³ג€˜׳³ֲ¡ / ׳³ג€™׳³ג„¢׳³ֻ׳³ֲ¨׳³ג€ / ׳³ֲ©׳³ג„¢׳³ֲ¨׳³ג€">
+                    <option value="bass">׳ ֲֲֲ¸ ׳³ג€˜׳³ֲ¡ (Demucs + Basic Pitch)</option>
+                    <option value="guitar">׳ ֲֲֲ¸ ׳³ג€™׳³ג„¢׳³ֻ׳³ֲ¨׳³ג€ (Demucs + Basic Pitch)</option>
+                    <option value="vocals">׳ ֲֲג‚× ׳³ֲ©׳³ג„¢׳³ֲ¨׳³ג€ (Demucs + Basic Pitch)</option>
                 </optgroup>
-                <optgroup label="׳׳—׳¨">
-                    <option value="drums">נ¥ ׳×׳•׳₪׳™׳ (׳‘׳¡׳™׳¡׳™: ׳§׳™׳§ / ׳¡׳ ׳™׳™׳¨ / ׳”׳׳˜)</option>
-                    <option value="other">נ¼ ׳©׳׳¨ ׳”׳›׳׳™׳ (׳¡׳˜׳ "other")</option>
+                <optgroup label="׳³ֲ׳³ג€”׳³ֲ¨">
+                    <option value="drums">׳ ֲֲ¥ֲ ׳³ֳ—׳³ג€¢׳³ג‚×׳³ג„¢׳³ֲ (׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡׳³ג„¢: ׳³ֲ§׳³ג„¢׳³ֲ§ / ׳³ֲ¡׳³ֲ ׳³ג„¢׳³ג„¢׳³ֲ¨ / ׳³ג€׳³ֲ׳³ֻ)</option>
+                    <option value="other">׳ ֲֲֲ¼ ׳³ֲ©׳³ֲ׳³ֲ¨ ׳³ג€׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ (׳³ֲ¡׳³ֻ׳³ֲ "other")</option>
                 </optgroup>
             </select>
-            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳›׳ ׳‘׳—׳™׳¨׳” ׳׳₪׳¢׳™׳׳” ׳§׳•׳“׳ ׳”׳₪׳¨׳“׳× Demucs ׳׳׳™׳×׳™׳×, ׳•׳¨׳§ ׳׳– ׳׳×׳׳׳׳× ׳׳× ׳”׳›׳׳™ ׳”׳׳‘׳•׳“׳“ -- ׳׳ ׳׳× ׳›׳ ׳”׳×׳¢׳¨׳•׳‘׳×.</p>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(0)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(2)">׳”׳‘׳</button></div>
+            <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳³ג€÷׳³ֲ ׳³ג€˜׳³ג€”׳³ג„¢׳³ֲ¨׳³ג€ ׳³ֲ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€ ׳³ֲ§׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¨׳³ג€׳³ֳ— Demucs ׳³ֲ׳³ֲ׳³ג„¢׳³ֳ—׳³ג„¢׳³ֳ—, ׳³ג€¢׳³ֲ¨׳³ֲ§ ׳³ֲ׳³ג€“ ׳³ֲ׳³ֳ—׳³ֲ׳³ֲ׳³ֲ׳³ֳ— ׳³ֲ׳³ֳ— ׳³ג€׳³ג€÷׳³ֲ׳³ג„¢ ׳³ג€׳³ֲ׳³ג€˜׳³ג€¢׳³ג€׳³ג€ -- ׳³ֲ׳³ֲ ׳³ֲ׳³ֳ— ׳³ג€÷׳³ֲ ׳³ג€׳³ֳ—׳³ֲ¢׳³ֲ¨׳³ג€¢׳³ג€˜׳³ֳ—.</p>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(0)">׳³ג€”׳³ג€“׳³ג€¢׳³ֲ¨</button><button type="button" onclick="goStep(2)">׳³ג€׳³ג€˜׳³ֲ</button></div>
             </div>
 
             <div class="stepstage" id="step2">
-            <h2>3. ׳§׳¦׳‘ ׳•׳¡׳•׳׳</h2>
+            <h2>3. ׳³ֲ§׳³ֲ¦׳³ג€˜ ׳³ג€¢׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ</h2>
             <div class="modebar">
-                <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>׳–׳™׳”׳•׳™ ׳׳•׳˜׳•׳׳˜׳™</span></label>
-                <label><input type="radio" name="mode" value="manual" onchange="setMode('manual')"><span>׳§׳‘׳™׳¢׳” ׳™׳“׳ ׳™׳×</span></label>
-                <label><input type="radio" name="mode" value="anchor" onchange="setMode('anchor')"><span>MIDI ׳‘׳¡׳™׳¡</span></label>
+                <label><input type="radio" name="mode" value="detect" checked onchange="setMode('detect')"><span>׳³ג€“׳³ג„¢׳³ג€׳³ג€¢׳³ג„¢ ׳³ֲ׳³ג€¢׳³ֻ׳³ג€¢׳³ֲ׳³ֻ׳³ג„¢</span></label>
+                <label><input type="radio" name="mode" value="manual" onchange="setMode('manual')"><span>׳³ֲ§׳³ג€˜׳³ג„¢׳³ֲ¢׳³ג€ ׳³ג„¢׳³ג€׳³ֲ ׳³ג„¢׳³ֳ—</span></label>
+                <label><input type="radio" name="mode" value="anchor" onchange="setMode('anchor')"><span>MIDI ׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡</span></label>
             </div>
 
             <div class="modepane active" id="pane-detect">
-                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">׳”׳¡׳•׳׳ ׳™׳–׳•׳”׳” ׳׳×׳•׳ ׳”׳×׳•׳•׳™׳ ׳©׳×׳•׳׳׳׳•, ׳•׳”׳§׳¦׳‘ (BPM) ׳׳×׳•׳ ׳”׳׳•׳“׳™׳• ׳¢׳¦׳׳• (librosa.beat_track). ׳׳ ׳¦׳¨׳™׳ ׳׳”׳¢׳׳•׳× ׳©׳•׳ ׳“׳‘׳¨ ׳ ׳•׳¡׳£.</p>
+                <p style="color:#64748b;font-size:0.78rem;margin-top:4px">׳³ג€׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ ׳³ג„¢׳³ג€“׳³ג€¢׳³ג€׳³ג€ ׳³ֲ׳³ֳ—׳³ג€¢׳³ֲ ׳³ג€׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ ׳³ֲ©׳³ֳ—׳³ג€¢׳³ֲ׳³ֲ׳³ֲ׳³ג€¢, ׳³ג€¢׳³ג€׳³ֲ§׳³ֲ¦׳³ג€˜ (BPM) ׳³ֲ׳³ֳ—׳³ג€¢׳³ֲ ׳³ג€׳³ֲ׳³ג€¢׳³ג€׳³ג„¢׳³ג€¢ ׳³ֲ¢׳³ֲ¦׳³ֲ׳³ג€¢ (librosa.beat_track). ׳³ֲ׳³ֲ ׳³ֲ¦׳³ֲ¨׳³ג„¢׳³ֲ ׳³ֲ׳³ג€׳³ֲ¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ֲ©׳³ג€¢׳³ֲ ׳³ג€׳³ג€˜׳³ֲ¨ ׳³ֲ ׳³ג€¢׳³ֲ¡׳³ֲ£.</p>
             </div>
 
             <div class="modepane" id="pane-manual">
                 <div class="row2">
                     <div>
-                        <label class="fieldlabel">׳¡׳•׳׳</label>
+                        <label class="fieldlabel">׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ</label>
                         <select id="keyTonic">
                             <option value="0">C</option><option value="1">C#</option><option value="2">D</option>
                             <option value="3">D#</option><option value="4">E</option><option value="5">F</option>
@@ -804,63 +801,63 @@ HTML_CONTENT = """<!DOCTYPE html>
                         </select>
                     </div>
                     <div>
-                        <label class="fieldlabel">׳׳–'׳•׳¨/׳׳™׳ ׳•׳¨</label>
-                        <select id="keyMode"><option value="major">׳׳–'׳•׳¨</option><option value="minor">׳׳™׳ ׳•׳¨</option></select>
+                        <label class="fieldlabel">׳³ֲ׳³ג€“'׳³ג€¢׳³ֲ¨/׳³ֲ׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ¨</label>
+                        <select id="keyMode"><option value="major">׳³ֲ׳³ג€“'׳³ג€¢׳³ֲ¨</option><option value="minor">׳³ֲ׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ¨</option></select>
                     </div>
                 </div>
-                <label class="fieldlabel">׳§׳¦׳‘ (BPM)</label>
+                <label class="fieldlabel">׳³ֲ§׳³ֲ¦׳³ג€˜ (BPM)</label>
                 <input type="number" id="manualBpm" value="120" style="width:100%;padding:12px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:white;box-sizing:border-box;">
             </div>
 
             <div class="modepane" id="pane-anchor">
-                <label class="fieldlabel">׳§׳•׳‘׳¥ MIDI ׳‘׳¡׳™׳¡</label>
+                <label class="fieldlabel">׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ MIDI ׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡</label>
                 <input type="file" id="anchorFile" accept=".mid,.midi" style="display:block;width:100%;color:#94a3b8;font-size:0.85rem;">
-                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳”׳¡׳•׳׳, ׳׳₪׳× ׳”׳˜׳׳₪׳• ׳•׳׳§׳¦׳‘ (׳›׳•׳׳ ׳©׳™׳ ׳•׳™׳™׳ ׳‘׳׳׳¦׳¢ ׳”׳©׳™׳¨) ׳™׳™׳§׳¨׳׳• ׳׳•׳˜׳•׳׳˜׳™׳× ׳׳”׳§׳•׳‘׳¥ ׳”׳–׳”.</p>
+                <p style="color:#64748b;font-size:0.78rem;margin-top:6px">׳³ג€׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ, ׳³ֲ׳³ג‚×׳³ֳ— ׳³ג€׳³ֻ׳³ֲ׳³ג‚×׳³ג€¢ ׳³ג€¢׳³ֲ׳³ֲ§׳³ֲ¦׳³ג€˜ (׳³ג€÷׳³ג€¢׳³ֲ׳³ֲ ׳³ֲ©׳³ג„¢׳³ֲ ׳³ג€¢׳³ג„¢׳³ג„¢׳³ֲ ׳³ג€˜׳³ֲ׳³ֲ׳³ֲ¦׳³ֲ¢ ׳³ג€׳³ֲ©׳³ג„¢׳³ֲ¨) ׳³ג„¢׳³ג„¢׳³ֲ§׳³ֲ¨׳³ֲ׳³ג€¢ ׳³ֲ׳³ג€¢׳³ֻ׳³ג€¢׳³ֲ׳³ֻ׳³ג„¢׳³ֳ— ׳³ֲ׳³ג€׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ ׳³ג€׳³ג€“׳³ג€.</p>
             </div>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(1)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(3)">׳”׳‘׳</button></div>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(1)">׳³ג€”׳³ג€“׳³ג€¢׳³ֲ¨</button><button type="button" onclick="goStep(3)">׳³ג€׳³ג€˜׳³ֲ</button></div>
             </div>
 
             <div class="stepstage" id="step3">
-            <h2>4. ׳׳₪׳©׳¨׳•׳™׳•׳×</h2>
+            <h2>4. ׳³ֲ׳³ג‚×׳³ֲ©׳³ֲ¨׳³ג€¢׳³ג„¢׳³ג€¢׳³ֳ—</h2>
             <label id="splitRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:14px;text-align:right">
                 <input type="checkbox" id="splitHands" style="width:auto">
-                ׳₪׳™׳¦׳•׳ ׳׳©׳×׳™ ׳™׳“׳™׳™׳ (׳׳™׳“ ׳™׳׳™׳/׳©׳׳׳, ׳¨׳§ ׳׳₪׳¡׳ ׳×׳¨)
+                ׳³ג‚×׳³ג„¢׳³ֲ¦׳³ג€¢׳³ֲ ׳³ֲ׳³ֲ©׳³ֳ—׳³ג„¢ ׳³ג„¢׳³ג€׳³ג„¢׳³ג„¢׳³ֲ (׳³ֲ׳³ג„¢׳³ג€ ׳³ג„¢׳³ֲ׳³ג„¢׳³ֲ/׳³ֲ©׳³ֲ׳³ֲ׳³ֲ, ׳³ֲ¨׳³ֲ§ ׳³ֲ׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨)
             </label>
 
             <label id="pedalRow" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="keepPedal" style="width:auto">
-                ׳©׳׳•׳¨ ׳₪׳“׳ ׳¡׳׳¡׳˜׳™׳™׳ ׳›׳׳™׳¨׳•׳¢׳™׳ ׳ ׳₪׳¨׳“׳™׳ (CC64), ׳‘׳׳™ ׳׳׳×׳•׳— ׳׳× ׳”׳×׳•׳•׳™׳
+                ׳³ֲ©׳³ֲ׳³ג€¢׳³ֲ¨ ׳³ג‚×׳³ג€׳³ֲ ׳³ֲ¡׳³ֲ׳³ֲ¡׳³ֻ׳³ג„¢׳³ג„¢׳³ֲ ׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ¨׳³ג€¢׳³ֲ¢׳³ג„¢׳³ֲ ׳³ֲ ׳³ג‚×׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ (CC64), ׳³ג€˜׳³ֲ׳³ג„¢ ׳³ֲ׳³ֲ׳³ֳ—׳³ג€¢׳³ג€” ׳³ֲ׳³ֳ— ׳³ג€׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ
             </label>
 
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="addChords" checked style="width:auto">
-                ׳”׳•׳¡׳£ ׳¡׳™׳׳ ׳™ ׳׳§׳•׳¨׳“׳™׳ ׳׳¢׳ ׳”׳×׳•׳•׳™׳ (lead sheet)
+                ׳³ג€׳³ג€¢׳³ֲ¡׳³ֲ£ ׳³ֲ¡׳³ג„¢׳³ֲ׳³ֲ ׳³ג„¢ ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ ׳³ֲ׳³ֲ¢׳³ֲ ׳³ג€׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ (lead sheet)
             </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="writtenPitch" style="width:auto">
-                ׳×׳•׳•׳™׳ ׳›׳×׳•׳‘׳™׳ ׳׳›׳׳™ ׳׳×׳•׳¢׳×׳§ (׳¡׳§׳¡׳•׳₪׳•׳ / ׳—׳¦׳•׳¦׳¨׳” ׳‘-Bb / Eb)
+                ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ ׳³ג€÷׳³ֳ—׳³ג€¢׳³ג€˜׳³ג„¢׳³ֲ ׳³ֲ׳³ג€÷׳³ֲ׳³ג„¢ ׳³ֲ׳³ֳ—׳³ג€¢׳³ֲ¢׳³ֳ—׳³ֲ§ (׳³ֲ¡׳³ֲ§׳³ֲ¡׳³ג€¢׳³ג‚×׳³ג€¢׳³ֲ / ׳³ג€”׳³ֲ¦׳³ג€¢׳³ֲ¦׳³ֲ¨׳³ג€ ׳³ג€˜-Bb / Eb)
             </label>
 
             <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:#94a3b8;margin-top:10px;text-align:right">
                 <input type="checkbox" id="soloMode" style="width:auto">
-                ׳”׳§׳׳˜׳” ׳©׳ ׳›׳׳™ ׳׳—׳“ (׳׳׳©׳ ׳₪׳¡׳ ׳×׳¨ ׳¡׳•׳׳•) ג€“ ׳‘׳׳™ ׳”׳₪׳¨׳“׳× Demucs (׳׳“׳•׳™׳§ ׳™׳•׳×׳¨, ׳•׳’׳ ׳׳”׳™׳¨)
+                ׳³ג€׳³ֲ§׳³ֲ׳³ֻ׳³ג€ ׳³ֲ©׳³ֲ ׳³ג€÷׳³ֲ׳³ג„¢ ׳³ֲ׳³ג€”׳³ג€ (׳³ֲ׳³ֲ׳³ֲ©׳³ֲ ׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ ׳³ֲ¡׳³ג€¢׳³ֲ׳³ג€¢) ׳’ג‚¬ג€ ׳³ג€˜׳³ֲ׳³ג„¢ ׳³ג€׳³ג‚×׳³ֲ¨׳³ג€׳³ֳ— Demucs (׳³ֲ׳³ג€׳³ג€¢׳³ג„¢׳³ֲ§ ׳³ג„¢׳³ג€¢׳³ֳ—׳³ֲ¨, ׳³ג€¢׳³ג€™׳³ֲ ׳³ֲ׳³ג€׳³ג„¢׳³ֲ¨)
             </label>
             <div style="margin-top:10px;text-align:right;font-size:0.85rem;color:#94a3b8">
-                ׳׳©׳§׳:
+                ׳³ֲ׳³ֲ©׳³ֲ§׳³ֲ:
                 <select id="forceBeats" style="width:auto;display:inline-block;padding:6px">
-                    <option value="0">׳׳•׳˜׳•׳׳˜׳™</option><option value="2">2 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (2/4)</option>
-                    <option value="3">3 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (3/4)</option><option value="4">4 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳” (4/4)</option>
-                    <option value="5">5 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="6">6 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
-                    <option value="7">7 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="9">9 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
-                    <option value="11">11 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option><option value="13">13 ׳₪׳¢׳™׳׳•׳× ׳‘׳×׳™׳‘׳”</option>
+                    <option value="0">׳³ֲ׳³ג€¢׳³ֻ׳³ג€¢׳³ֲ׳³ֻ׳³ג„¢</option><option value="2">2 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€ (2/4)</option>
+                    <option value="3">3 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€ (3/4)</option><option value="4">4 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€ (4/4)</option>
+                    <option value="5">5 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option><option value="6">6 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option>
+                    <option value="7">7 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option><option value="9">9 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option>
+                    <option value="11">11 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option><option value="13">13 ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ג€˜׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€</option>
                 </select>
             </div>
-            <div class="steprow"><button type="button" class="ghost" onclick="goStep(2)">׳—׳–׳•׳¨</button><button type="button" onclick="goStep(4)">׳”׳‘׳</button></div>
+            <div class="steprow"><button type="button" class="ghost" onclick="goStep(2)">׳³ג€”׳³ג€“׳³ג€¢׳³ֲ¨</button><button type="button" onclick="goStep(4)">׳³ג€׳³ג€˜׳³ֲ</button></div>
             </div>
 
             <div class="stepstage" id="step4">
-            <h2>5. ׳”׳׳¨׳”</h2>
-            <button type="submit" id="submitBtn">׳”׳׳¨ ׳׳×׳•׳•׳™׳ + MIDI נ€</button>
+            <h2>5. ׳³ג€׳³ֲ׳³ֲ¨׳³ג€</h2>
+            <button type="submit" id="submitBtn">׳³ג€׳³ֲ׳³ֲ¨ ׳³ֲ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ + MIDI ׳ ֲֲג‚¬</button>
             <div id="status"></div>
             </div>
         </form>
@@ -913,7 +910,7 @@ HTML_CONTENT = """<!DOCTYPE html>
     <script>
         function updateFileName(input) {
             if (input.files.length > 0) {
-                document.getElementById('fileName').innerText = "נ“„ " + input.files[0].name;
+                document.getElementById('fileName').innerText = "׳ ֲג€ג€ " + input.files[0].name;
             }
         }
         let curStep = 0;
@@ -944,12 +941,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             const mode = document.querySelector('input[name="mode"]:checked').value;
             if (mode === 'anchor' && !document.getElementById('anchorFile').files.length) {
                 status.className = "error";
-                status.innerText = "ג ׳™׳© ׳׳‘׳—׳•׳¨ ׳§׳•׳‘׳¥ MIDI ׳‘׳¡׳™׳¡, ׳׳• ׳׳¢׳‘׳•׳¨ ׳׳׳¦׳‘ ׳™׳“׳ ׳™.";
+                status.innerText = "׳’ֲֲ ׳³ג„¢׳³ֲ© ׳³ֲ׳³ג€˜׳³ג€”׳³ג€¢׳³ֲ¨ ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ MIDI ׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡, ׳³ֲ׳³ג€¢ ׳³ֲ׳³ֲ¢׳³ג€˜׳³ג€¢׳³ֲ¨ ׳³ֲ׳³ֲ׳³ֲ¦׳³ג€˜ ׳³ג„¢׳³ג€׳³ֲ ׳³ג„¢.";
                 return;
             }
 
             status.className = "loading";
-            status.innerText = "ג³ ׳׳₪׳¨׳™׳“ ׳›׳׳™׳ ׳•׳׳×׳׳׳... ׳–׳” ׳™׳›׳•׳ ׳׳§׳—׳× ׳›׳׳” ׳“׳§׳•׳×, ׳׳ ׳×׳¡׳’׳•׳¨ ׳׳× ׳”׳“׳£";
+            status.innerText = "׳’ֲֲ³ ׳³ֲ׳³ג‚×׳³ֲ¨׳³ג„¢׳³ג€ ׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ׳³ֳ—׳³ֲ׳³ֲ׳³ֲ... ׳³ג€“׳³ג€ ׳³ג„¢׳³ג€÷׳³ג€¢׳³ֲ ׳³ֲ׳³ֲ§׳³ג€”׳³ֳ— ׳³ג€÷׳³ֲ׳³ג€ ׳³ג€׳³ֲ§׳³ג€¢׳³ֳ—, ׳³ֲ׳³ֲ ׳³ֳ—׳³ֲ¡׳³ג€™׳³ג€¢׳³ֲ¨ ׳³ֲ׳³ֳ— ׳³ג€׳³ג€׳³ֲ£";
             btn.disabled = true;
             btn.style.opacity = "0.5";
 
@@ -994,28 +991,28 @@ HTML_CONTENT = """<!DOCTYPE html>
                         fails = 0;
                     } catch (e) {
                         fails++;
-                        if (fails >= 8) throw new Error('׳”׳—׳™׳‘׳•׳¨ ׳׳©׳¨׳× ׳ ׳₪׳ (׳”׳©׳¨׳× ׳׳• ׳”׳׳ ׳”׳¨׳” ׳›׳‘׳•). ׳”׳¨׳¥ ׳©׳•׳‘ ׳׳× ׳×׳ ׳”׳”׳₪׳¢׳׳” ׳‘-Colab.');
+                        if (fails >= 8) throw new Error('׳³ג€׳³ג€”׳³ג„¢׳³ג€˜׳³ג€¢׳³ֲ¨ ׳³ֲ׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ֲ ׳³ג‚×׳³ֲ (׳³ג€׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ֲ׳³ג€¢ ׳³ג€׳³ֲ׳³ֲ ׳³ג€׳³ֲ¨׳³ג€ ׳³ג€÷׳³ג€˜׳³ג€¢). ׳³ג€׳³ֲ¨׳³ֲ¥ ׳³ֲ©׳³ג€¢׳³ג€˜ ׳³ֲ׳³ֳ— ׳³ֳ—׳³ֲ ׳³ג€׳³ג€׳³ג‚×׳³ֲ¢׳³ֲ׳³ג€ ׳³ג€˜-Colab.');
                         continue;
                     }
-                    if (r.status === 404) throw new Error('׳”׳׳©׳™׳׳” ׳ ׳¢׳׳׳” -- ׳”׳©׳¨׳× ׳”׳•׳₪׳¢׳ ׳׳—׳“׳© ׳‘׳׳׳¦׳¢. ׳ ׳¡׳” ׳©׳•׳‘.');
-                    if (!r.ok) throw new Error('׳‘׳“׳™׳§׳× ׳”׳¡׳˜׳˜׳•׳¡ ׳ ׳›׳©׳׳” (HTTP ' + r.status + ')');
+                    if (r.status === 404) throw new Error('׳³ג€׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€ ׳³ֲ ׳³ֲ¢׳³ֲ׳³ֲ׳³ג€ -- ׳³ג€׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ג€׳³ג€¢׳³ג‚×׳³ֲ¢׳³ֲ ׳³ֲ׳³ג€”׳³ג€׳³ֲ© ׳³ג€˜׳³ֲ׳³ֲ׳³ֲ¦׳³ֲ¢. ׳³ֲ ׳³ֲ¡׳³ג€ ׳³ֲ©׳³ג€¢׳³ג€˜.');
+                    if (!r.ok) throw new Error('׳³ג€˜׳³ג€׳³ג„¢׳³ֲ§׳³ֳ— ׳³ג€׳³ֲ¡׳³ֻ׳³ֻ׳³ג€¢׳³ֲ¡ ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ׳³ג€ (HTTP ' + r.status + ')');
                     info = await r.json();
-                    if (info.status === 'error') throw new Error(info.error || '׳”׳¢׳™׳‘׳•׳“ ׳ ׳›׳©׳');
+                    if (info.status === 'error') throw new Error(info.error || '׳³ג€׳³ֲ¢׳³ג„¢׳³ג€˜׳³ג€¢׳³ג€ ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ');
                     status.className = "loading";
-                    status.innerText = 'ג³ ' + (info.stage || '׳׳¢׳‘׳“...');
+                    status.innerText = '׳’ֲֲ³ ' + (info.stage || '׳³ֲ׳³ֲ¢׳³ג€˜׳³ג€...');
                     if (info.status === 'done') break;
                 }
 
                 // 3) download buttons (MIDI / MusicXML for MuseScore / PDF when available)
-                const labels = {midi_raw: 'ג¬‡ MIDI ׳‘׳™׳¦׳•׳¢ ׳׳§׳•׳¨׳™ (׳׳•׳׳׳¥ ׳-DAW)', midi: 'ג¬‡ MIDI ׳׳§׳•׳•׳ ׳˜׳– (׳×׳•׳׳ ׳׳×׳•׳•׳™׳)', xml: 'ג¬‡ MusicXML (MuseScore)', pdf: 'ג¬‡ PDF'};
+                const labels = {midi_raw: '׳’ֲ¬ג€¡ MIDI ׳³ג€˜׳³ג„¢׳³ֲ¦׳³ג€¢׳³ֲ¢ ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג„¢ (׳³ֲ׳³ג€¢׳³ֲ׳³ֲ׳³ֲ¥ ׳³ֲ-DAW)', midi: '׳’ֲ¬ג€¡ MIDI ׳³ֲ׳³ֲ§׳³ג€¢׳³ג€¢׳³ֲ ׳³ֻ׳³ג€“ (׳³ֳ—׳³ג€¢׳³ֲ׳³ֲ ׳³ֲ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ)', xml: '׳’ֲ¬ג€¡ MusicXML (MuseScore)', pdf: '׳’ֲ¬ג€¡ PDF'};
                 const base = (document.getElementById('audioFile').files[0].name || 'transcribed').replace(/\\.[^.]+$/, '');
                 const extOf = {midi_raw: '_performance.mid', midi: '_quantized.mid', xml: '.musicxml', pdf: '.pdf'};
                 status.className = info.used_fallback ? "loading" : "success";
-                let msg = info.used_fallback ? "ג ן¸ ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳”׳™׳™׳¢׳•׳“׳™ ׳׳ ׳”׳™׳” ׳–׳׳™׳ -- ׳ ׳¢׳©׳” ׳©׳™׳׳•׳© ׳‘-Basic Pitch.<br>" : "ג… ׳”׳”׳׳¨׳” ׳”׳•׳©׳׳׳”!<br>";
-                msg += (info.n_bars || 0) + ' ׳×׳™׳‘׳•׳× | ׳׳©׳§׳: ' + (info.meter || []).join(', ') + ' | ׳˜׳׳₪׳•: ' + (info.tempo || []).join(', ') + ' | ׳׳§׳•׳¨׳“׳™׳: ' + (info.n_chords || 0);
-                if (info.beat_engine) msg += ' | ׳₪׳¢׳™׳׳•׳×: ' + info.beat_engine;
-                if (info.dtw_used === true) msg += ' | ׳™׳•׳©׳¨ ׳-MIDI ׳”׳‘׳¡׳™׳¡ (DTW)';
-                else if (info.dtw_used === false) msg += ' | ׳™׳™׳©׳•׳¨ DTW ׳ ׳›׳©׳';
+                let msg = info.used_fallback ? "׳’ֲֲ ׳ֲ¸ֲ ׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ ׳³ג€׳³ג„¢׳³ג„¢׳³ֲ¢׳³ג€¢׳³ג€׳³ג„¢ ׳³ֲ׳³ֲ ׳³ג€׳³ג„¢׳³ג€ ׳³ג€“׳³ֲ׳³ג„¢׳³ֲ -- ׳³ֲ ׳³ֲ¢׳³ֲ©׳³ג€ ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€¢׳³ֲ© ׳³ג€˜-Basic Pitch.<br>" : "׳’ֲג€¦ ׳³ג€׳³ג€׳³ֲ׳³ֲ¨׳³ג€ ׳³ג€׳³ג€¢׳³ֲ©׳³ֲ׳³ֲ׳³ג€!<br>";
+                msg += (info.n_bars || 0) + ' ׳³ֳ—׳³ג„¢׳³ג€˜׳³ג€¢׳³ֳ— | ׳³ֲ׳³ֲ©׳³ֲ§׳³ֲ: ' + (info.meter || []).join(', ') + ' | ׳³ֻ׳³ֲ׳³ג‚×׳³ג€¢: ' + (info.tempo || []).join(', ') + ' | ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ: ' + (info.n_chords || 0);
+                if (info.beat_engine) msg += ' | ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ—: ' + info.beat_engine;
+                if (info.dtw_used === true) msg += ' | ׳³ג„¢׳³ג€¢׳³ֲ©׳³ֲ¨ ׳³ֲ-MIDI ׳³ג€׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡ (DTW)';
+                else if (info.dtw_used === false) msg += ' | ׳³ג„¢׳³ג„¢׳³ֲ©׳³ג€¢׳³ֲ¨ DTW ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ';
                 status.innerHTML = msg + '<br>';
                 for (const f of (info.formats || [])) {
                     const a = document.createElement('a');
@@ -1027,7 +1024,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
             } catch (err) {
                 status.className = "error";
-                status.innerText = "ג ׳©׳’׳™׳׳”: " + (err && err.message ? err.message : err);
+                status.innerText = "׳’ֲֲ ׳³ֲ©׳³ג€™׳³ג„¢׳³ֲ׳³ג€: " + (err && err.message ? err.message : err);
             } finally {
                 btn.disabled = false;
                 btn.style.opacity = "1";
@@ -1072,7 +1069,7 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
                 f.write(MUSCRIPTOR_MODEL.transcribe_to_midi(stem_wav))
             ms_ok = os.path.exists(out_mid) and os.path.getsize(out_mid) > 0
         except Exception:
-            print(f"ג ן¸ MuScriptor ׳ ׳›׳©׳ ׳¢׳ ׳”׳¡׳˜׳ ׳”׳–׳” ({model}) -- ׳¢׳•׳‘׳¨ ׳׳©׳¨׳©׳¨׳× ׳”׳§׳•׳“׳׳×")
+            print(f"׳’ֲֲ ׳ֲ¸ֲ MuScriptor ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ ׳³ֲ¢׳³ֲ ׳³ג€׳³ֲ¡׳³ֻ׳³ֲ ׳³ג€׳³ג€“׳³ג€ ({model}) -- ׳³ֲ¢׳³ג€¢׳³ג€˜׳³ֲ¨ ׳³ֲ׳³ֲ©׳³ֲ¨׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ג€׳³ֲ§׳³ג€¢׳³ג€׳³ֲ׳³ֳ—")
             traceback.print_exc()
             ms_ok = False
     tk_ok = False
@@ -1095,10 +1092,10 @@ def _stem_notes(model, stem_wav, work_prefix, job_id):
     else:
         used_fallback = (model == "piano")
         if used_fallback:
-            print("ג ן¸ ׳׳•׳“׳ ׳”׳₪׳¡׳ ׳×׳¨ ׳׳ ׳–׳׳™׳ -- ׳¢׳•׳‘׳¨ ׳-Basic Pitch ׳¢׳ ׳”׳¡׳˜׳ ׳”׳׳‘׳•׳“׳“")
+            print("׳’ֲֲ ׳ֲ¸ֲ ׳³ֲ׳³ג€¢׳³ג€׳³ֲ ׳³ג€׳³ג‚×׳³ֲ¡׳³ֲ ׳³ֳ—׳³ֲ¨ ׳³ֲ׳³ֲ ׳³ג€“׳³ֲ׳³ג„¢׳³ֲ -- ׳³ֲ¢׳³ג€¢׳³ג€˜׳³ֲ¨ ׳³ֲ-Basic Pitch ׳³ֲ¢׳³ֲ ׳³ג€׳³ֲ¡׳³ֻ׳³ֲ ׳³ג€׳³ֲ׳³ג€˜׳³ג€¢׳³ג€׳³ג€")
         basic_pitch_to_midi(stem_wav, out_mid, model)
     if not os.path.exists(out_mid):
-        raise HTTPException(status_code=500, detail="׳§׳•׳‘׳¥ ׳”-MIDI ׳׳ ׳ ׳•׳¦׳¨")
+        raise HTTPException(status_code=500, detail="׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ ׳³ג€-MIDI ׳³ֲ׳³ֲ ׳³ֲ ׳³ג€¢׳³ֲ¦׳³ֲ¨")
     parsed = read_midi_notes_and_map(out_mid)
     if model == "piano" and not used_fallback:
         pedal = parsed["pedal"]
@@ -1122,27 +1119,27 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
     mix_wav = f"uploads/{job_id}_mix.wav"
     orig_stem = os.path.splitext(orig_filename or "transcribed")[0] or "transcribed"
     try:
-        _set(job_id, status="queued", stage="׳׳׳×׳™׳ ׳׳×׳•׳¨׳•...")
+        _set(job_id, status="queued", stage="׳³ֲ׳³ֲ׳³ֳ—׳³ג„¢׳³ֲ ׳³ֲ׳³ֳ—׳³ג€¢׳³ֲ¨׳³ג€¢...")
         with JOB_LOCK:
-            _set(job_id, status="running", stage="׳׳₪׳¨׳™׳“ ׳›׳׳™׳ ׳¢׳ Demucs (׳”׳©׳׳‘ ׳”׳׳¨׳•׳, ׳‘׳₪׳¢׳ ׳”׳¨׳׳©׳•׳ ׳” ׳’׳ ׳™׳•׳¨׳“ ׳׳•׳“׳)...")
+            _set(job_id, status="running", stage="׳³ֲ׳³ג‚×׳³ֲ¨׳³ג„¢׳³ג€ ׳³ג€÷׳³ֲ׳³ג„¢׳³ֲ ׳³ֲ¢׳³ֲ Demucs (׳³ג€׳³ֲ©׳³ֲ׳³ג€˜ ׳³ג€׳³ֲ׳³ֲ¨׳³ג€¢׳³ֲ, ׳³ג€˜׳³ג‚×׳³ֲ¢׳³ֲ ׳³ג€׳³ֲ¨׳³ֲ׳³ֲ©׳³ג€¢׳³ֲ ׳³ג€ ׳³ג€™׳³ֲ ׳³ג„¢׳³ג€¢׳³ֲ¨׳³ג€ ׳³ֲ׳³ג€¢׳³ג€׳³ֲ)...")
             solo = bool(solo) and model != "all"
             base = os.path.splitext(os.path.basename(raw_path))[0]
             stem_dir = os.path.join(sep_dir, "htdemucs_6s", base)
             if not solo:
                 r = subprocess.run(["demucs", "-n", "htdemucs_6s", "-o", sep_dir, raw_path], capture_output=True, text=True)
                 if r.returncode != 0:
-                    raise HTTPException(status_code=500, detail=f"׳”׳₪׳¨׳“׳× Demucs ׳ ׳›׳©׳׳”: {r.stderr[-1500:]}")
+                    raise HTTPException(status_code=500, detail=f"׳³ג€׳³ג‚×׳³ֲ¨׳³ג€׳³ֳ— Demucs ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ׳³ג€: {r.stderr[-1500:]}")
             conv = subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "44100", "-ac", "1", mix_wav], capture_output=True, text=True)
             if conv.returncode != 0:
-                raise HTTPException(status_code=500, detail="׳”׳׳¨׳× ׳”׳׳™׳§׳¡ ׳ ׳›׳©׳׳”")
+                raise HTTPException(status_code=500, detail="׳³ג€׳³ֲ׳³ֲ¨׳³ֳ— ׳³ג€׳³ֲ׳³ג„¢׳³ֲ§׳³ֲ¡ ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ׳³ג€")
 
             kinds = ALL_PARTS if model == "all" else [model]
             parts, used_fallback, pedal_events = [], False, None
             for k_i, kind in enumerate(kinds):
                 src_stem = raw_path if solo else os.path.join(stem_dir, INSTR[kind]["stem"] + ".wav")
                 if not os.path.exists(src_stem):
-                    raise HTTPException(status_code=500, detail=f"׳”׳¡׳˜׳ '{INSTR[kind]['stem']}' ׳׳ ׳ ׳׳¦׳ ׳׳—׳¨׳™ ׳”׳”׳₪׳¨׳“׳”")
-                _set(job_id, stage=f"׳׳×׳׳׳ {kind} ({k_i + 1}/{len(kinds)})...")
+                    raise HTTPException(status_code=500, detail=f"׳³ג€׳³ֲ¡׳³ֻ׳³ֲ '{INSTR[kind]['stem']}' ׳³ֲ׳³ֲ ׳³ֲ ׳³ֲ׳³ֲ¦׳³ֲ ׳³ֲ׳³ג€”׳³ֲ¨׳³ג„¢ ׳³ג€׳³ג€׳³ג‚×׳³ֲ¨׳³ג€׳³ג€")
+                _set(job_id, stage=f"׳³ֲ׳³ֳ—׳³ֲ׳³ֲ׳³ֲ {kind} ({k_i + 1}/{len(kinds)})...")
                 stem_wav = f"uploads/{job_id}_{kind}_stem.wav"
                 subprocess.run(["ffmpeg", "-y", "-i", src_stem, "-ar", "32000", "-ac", "1", stem_wav], capture_output=True, text=True)
                 notes, pedal, fb = _stem_notes(kind, stem_wav, f"outputs/{job_id}_{kind}", job_id)
@@ -1150,18 +1147,18 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                 if notes:
                     parts.append(dict(kind=kind, notes=notes, pedal=pedal, stem_wav=stem_wav))
             if not parts:
-                raise HTTPException(status_code=500, detail="׳׳ ׳ ׳•׳×׳¨׳• ׳×׳•׳•׳™׳ ׳׳—׳¨׳™ ׳¡׳™׳ ׳•׳ ׳¨׳¢׳©׳™׳ -- ׳ ׳¡׳” ׳§׳•׳‘׳¥ ׳׳—׳¨")
+                raise HTTPException(status_code=500, detail="׳³ֲ׳³ֲ ׳³ֲ ׳³ג€¢׳³ֳ—׳³ֲ¨׳³ג€¢ ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ ׳³ֲ׳³ג€”׳³ֲ¨׳³ג„¢ ׳³ֲ¡׳³ג„¢׳³ֲ ׳³ג€¢׳³ֲ ׳³ֲ¨׳³ֲ¢׳³ֲ©׳³ג„¢׳³ֲ -- ׳³ֲ ׳³ֲ¡׳³ג€ ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ ׳³ֲ׳³ג€”׳³ֲ¨")
             for p in parts:                                   # performance-timing copy (for the raw MIDI)
                 p["orig"] = list(p["notes"])
                 p["orig_pedal"] = [e for a_, b_ in p["pedal"] for e in ((a_, 127), (b_, 0))]
 
-            _set(job_id, stage="׳׳–׳”׳” ׳₪׳¢׳™׳׳•׳×, ׳׳©׳§׳ ׳•׳˜׳׳₪׳•...")
+            _set(job_id, stage="׳³ֲ׳³ג€“׳³ג€׳³ג€ ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ—, ׳³ֲ׳³ֲ©׳³ֲ§׳³ֲ ׳³ג€¢׳³ֻ׳³ֲ׳³ג‚×׳³ג€¢...")
             dtw_used, key_notes, to_ref, beat_engine = None, None, None, None
             all_t = [n[1] for p in parts for n in p["notes"]]
             all_e = [n[2] for p in parts for n in p["notes"]]
             if mode == "anchor":
                 if not anchor_path:
-                    raise HTTPException(status_code=400, detail="׳׳¦׳‘ 'MIDI ׳‘׳¡׳™׳¡' ׳“׳•׳¨׳© ׳׳”׳¢׳׳•׳× ׳§׳•׳‘׳¥ MIDI")
+                    raise HTTPException(status_code=400, detail="׳³ֲ׳³ֲ¦׳³ג€˜ 'MIDI ׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡' ׳³ג€׳³ג€¢׳³ֲ¨׳³ֲ© ׳³ֲ׳³ג€׳³ֲ¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ MIDI")
                 anchor = read_midi_notes_and_map(anchor_path)
                 tempo_map, timesig_map = anchor["tempo_map"], anchor["timesig_map"]
                 anchor_notes = [(p, s, e) for p, s, e, v in anchor["notes"]]
@@ -1188,14 +1185,14 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                         tl = nt.timeline_from_beats(beats, downs, min(all_t), max(all_e), all_t, int(force_beats or 0))
                     except Exception:
                         traceback.print_exc()
-                        print("ג ן¸ ׳–׳™׳”׳•׳™ ׳₪׳¢׳™׳׳•׳× ׳ ׳›׳©׳ -- ׳¢׳•׳‘׳¨ ׳׳˜׳׳₪׳• ׳§׳‘׳•׳¢")
+                        print("׳’ֲֲ ׳ֲ¸ֲ ׳³ג€“׳³ג„¢׳³ג€׳³ג€¢׳³ג„¢ ׳³ג‚×׳³ֲ¢׳³ג„¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ -- ׳³ֲ¢׳³ג€¢׳³ג€˜׳³ֲ¨ ׳³ֲ׳³ֻ׳³ֲ׳³ג‚×׳³ג€¢ ׳³ֲ§׳³ג€˜׳³ג€¢׳³ֲ¢")
                 if tl is None:
                     bpm = float(manual_bpm) if mode == "manual" else detect_bpm_from_audio(mix_wav)
                     step = 60.0 / bpm
                     beats = np.arange(0.0, max(all_e) + 4 * step, step)
                     tl = nt.timeline_from_beats(beats, beats[::int(force_beats or 4)], min(all_t), max(all_e), all_t, int(force_beats or 0))
 
-            _set(job_id, stage="׳׳¦׳׳™׳“ ׳׳¡׳•׳׳׳•׳×, ׳׳™׳™׳©׳¨ ׳•׳׳§׳•׳•׳ ׳˜׳–...")
+            _set(job_id, stage="׳³ֲ׳³ֲ¦׳³ֲ׳³ג„¢׳³ג€ ׳³ֲ׳³ֲ¡׳³ג€¢׳³ֲ׳³ֲ׳³ג€¢׳³ֳ—, ׳³ֲ׳³ג„¢׳³ג„¢׳³ֲ©׳³ֲ¨ ׳³ג€¢׳³ֲ׳³ֲ§׳³ג€¢׳³ג€¢׳³ֲ ׳³ֻ׳³ג€“...")
             key_override = None
             if mode == "manual":
                 tonic, is_minor = int(manual_key_tonic), (manual_key_mode == "minor")
@@ -1218,7 +1215,7 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
 
             chords = []
             if add_chords:
-                _set(job_id, stage="׳׳–׳”׳” ׳׳§׳•׳¨׳“׳™׳...")
+                _set(job_id, stage="׳³ֲ׳³ג€“׳³ג€׳³ג€ ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ...")
                 try:
                     tl_audio = tl
                     if to_ref is not None:                     # anchor mode: score time -> performance time
@@ -1228,9 +1225,9 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                     chords = nt.detect_chords(mix_wav, bass_wav, tl_audio)
                 except Exception:
                     traceback.print_exc()
-                    print("ג ן¸ ׳–׳™׳”׳•׳™ ׳׳§׳•׳¨׳“׳™׳ ׳ ׳›׳©׳ -- ׳׳׳©׳™׳ ׳‘׳׳™ ׳׳§׳•׳¨׳“׳™׳")
+                    print("׳’ֲֲ ׳ֲ¸ֲ ׳³ג€“׳³ג„¢׳³ג€׳³ג€¢׳³ג„¢ ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ -- ׳³ֲ׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ ׳³ג€˜׳³ֲ׳³ג„¢ ׳³ֲ׳³ֲ§׳³ג€¢׳³ֲ¨׳³ג€׳³ג„¢׳³ֲ")
 
-            _set(job_id, stage="׳‘׳•׳ ׳” ׳×׳•׳•׳™׳ (MusicXML) ׳•-MIDI...")
+            _set(job_id, stage="׳³ג€˜׳³ג€¢׳³ֲ ׳³ג€ ׳³ֳ—׳³ג€¢׳³ג€¢׳³ג„¢׳³ֲ (MusicXML) ׳³ג€¢-MIDI...")
             raw_parts = []
             for p in parts:
                 rn = p["orig"] if p["kind"] == "drums" else smooth_velocities(
@@ -1255,13 +1252,13 @@ def _process_job(job_id, raw_path, anchor_path, orig_filename, model, mode,
                         files["pdf"] = pdf
                 except Exception:
                     traceback.print_exc()
-            _set(job_id, status="done", stage="׳”׳•׳©׳׳", files=files, download_name=orig_stem,
+            _set(job_id, status="done", stage="׳³ג€׳³ג€¢׳³ֲ©׳³ֲ׳³ֲ", files=files, download_name=orig_stem,
                  used_fallback=used_fallback, dtw_used=dtw_used, beat_engine=beat_engine,
                  n_bars=len(tl.bars), n_chords=len(chords),
                  meter=sorted({f"{b['num']}/{b['den']}" for b in tl.bars}),
                  tempo=[round(b) for _, b in tl.tempos][:6])
     except HTTPException as e:
-        print(f"ג ׳׳©׳™׳׳” {job_id} ׳ ׳›׳©׳׳”: {e.detail}")
+        print(f"׳’ֲֲ ׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€ {job_id} ׳³ֲ ׳³ג€÷׳³ֲ©׳³ֲ׳³ג€: {e.detail}")
         _set(job_id, status="error", error=str(e.detail))
     except Exception as err:
         traceback.print_exc()
@@ -1290,7 +1287,7 @@ async def transcribe(
 ):
     """Saves the uploads, starts the pipeline in the background and answers immediately."""
     if model not in INSTR and model != "all":
-        raise HTTPException(status_code=400, detail=f"׳›׳׳™ ׳׳ ׳׳•׳›׳¨: {model}")
+        raise HTTPException(status_code=400, detail=f"׳³ג€÷׳³ֲ׳³ג„¢ ׳³ֲ׳³ֲ ׳³ֲ׳³ג€¢׳³ג€÷׳³ֲ¨: {model}")
     job_id = uuid.uuid4().hex[:8]
     src_ext = os.path.splitext(file.filename or "")[1] or ".mp3"
     raw_path = f"uploads/{job_id}_raw{src_ext}"
@@ -1299,11 +1296,11 @@ async def transcribe(
     anchor_path = None
     if mode == "anchor":
         if anchor_midi is None:
-            raise HTTPException(status_code=400, detail="׳׳¦׳‘ 'MIDI ׳‘׳¡׳™׳¡' ׳“׳•׳¨׳© ׳׳”׳¢׳׳•׳× ׳§׳•׳‘׳¥ MIDI")
+            raise HTTPException(status_code=400, detail="׳³ֲ׳³ֲ¦׳³ג€˜ 'MIDI ׳³ג€˜׳³ֲ¡׳³ג„¢׳³ֲ¡' ׳³ג€׳³ג€¢׳³ֲ¨׳³ֲ© ׳³ֲ׳³ג€׳³ֲ¢׳³ֲ׳³ג€¢׳³ֳ— ׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ MIDI")
         anchor_path = f"uploads/{job_id}_anchor.mid"
         with open(anchor_path, "wb") as f:
             f.write(await anchor_midi.read())
-    JOBS[job_id] = {"status": "queued", "stage": "׳”׳×׳§׳‘׳", "error": None}
+    JOBS[job_id] = {"status": "queued", "stage": "׳³ג€׳³ֳ—׳³ֲ§׳³ג€˜׳³ֲ", "error": None}
     threading.Thread(
         target=_process_job,
         args=(job_id, raw_path, anchor_path, file.filename, model, mode,
@@ -1317,7 +1314,7 @@ async def transcribe(
 def job_status(job_id: str):
     job = JOBS.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="׳”׳׳©׳™׳׳” ׳׳ ׳ ׳׳¦׳׳” (׳™׳™׳×׳›׳ ׳©׳”׳©׳¨׳× ׳”׳•׳₪׳¢׳ ׳׳—׳“׳©)")
+        raise HTTPException(status_code=404, detail="׳³ג€׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€ ׳³ֲ׳³ֲ ׳³ֲ ׳³ֲ׳³ֲ¦׳³ֲ׳³ג€ (׳³ג„¢׳³ג„¢׳³ֳ—׳³ג€÷׳³ֲ ׳³ֲ©׳³ג€׳³ֲ©׳³ֲ¨׳³ֳ— ׳³ג€׳³ג€¢׳³ג‚×׳³ֲ¢׳³ֲ ׳³ֲ׳³ג€”׳³ג€׳³ֲ©)")
     out = {k: job.get(k) for k in ("status", "stage", "error", "download_name", "used_fallback", "dtw_used", "beat_engine", "n_bars", "n_chords", "meter", "tempo")}
     out["formats"] = list((job.get("files") or {}).keys())
     return out
@@ -1327,10 +1324,10 @@ def job_status(job_id: str):
 def job_download(job_id: str, fmt: str = "midi"):
     job = JOBS.get(job_id)
     if job is None or job.get("status") != "done":
-        raise HTTPException(status_code=404, detail="׳”׳§׳•׳‘׳¥ ׳¢׳“׳™׳™׳ ׳׳ ׳׳•׳›׳ ׳׳• ׳©׳”׳׳©׳™׳׳” ׳׳ ׳ ׳׳¦׳׳”")
+        raise HTTPException(status_code=404, detail="׳³ג€׳³ֲ§׳³ג€¢׳³ג€˜׳³ֲ¥ ׳³ֲ¢׳³ג€׳³ג„¢׳³ג„¢׳³ֲ ׳³ֲ׳³ֲ ׳³ֲ׳³ג€¢׳³ג€÷׳³ֲ ׳³ֲ׳³ג€¢ ׳³ֲ©׳³ג€׳³ֲ׳³ֲ©׳³ג„¢׳³ֲ׳³ג€ ׳³ֲ׳³ֲ ׳³ֲ ׳³ֲ׳³ֲ¦׳³ֲ׳³ג€")
     path = (job.get("files") or {}).get(fmt)
     if not path:
-        raise HTTPException(status_code=404, detail=f"׳”׳₪׳•׳¨׳׳˜ {fmt} ׳׳ ׳–׳׳™׳")
+        raise HTTPException(status_code=404, detail=f"׳³ג€׳³ג‚×׳³ג€¢׳³ֲ¨׳³ֲ׳³ֻ {fmt} ׳³ֲ׳³ֲ ׳³ג€“׳³ֲ׳³ג„¢׳³ֲ")
     ext = {"midi_raw": "_performance.mid", "midi": "_quantized.mid", "xml": ".musicxml", "pdf": ".pdf"}[fmt]
     mt = {"midi_raw": "audio/midi", "midi": "audio/midi", "xml": "application/vnd.recordare.musicxml+xml", "pdf": "application/pdf"}[fmt]
     name = job["download_name"] + ext
