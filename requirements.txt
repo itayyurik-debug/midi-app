@@ -4,12 +4,12 @@ python-multipart
 torch
 torchaudio
 basic-pitch
-tensorflow-cpu==2.16.1
+tensorflow-cpu
 onnxruntime
 librosa
 mido
 soundfile
 scipy
-numpy<2.0.0
+numpy
 demucs
-muscriptor==0.4.0
+muscriptor==0.3.0
