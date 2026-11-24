@@ -12,4 +12,4 @@ soundfile
 scipy
 numpy<2.0.0
 demucs
-muscriptor==0.2.6
+muscriptor==0.4.0
